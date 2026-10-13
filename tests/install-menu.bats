@@ -90,7 +90,7 @@ JSONC
 
 @test "AC7.1 a CLI dir with a space is shell-quoted in the action" {
   local dir action
-  dir="$(cli_copy "my plugins")"
+  dir="$(cli_copy "my cli")"
   run --separate-stderr "$dir/bin/omakindle" install-menu
   assert_success
   action="$(omarchy_parse '."kindle.send".action' | jq -r .)"
