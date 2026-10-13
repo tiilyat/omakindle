@@ -158,23 +158,19 @@ SMTP_LOGIN=login-name"
   assert_output "$PASSWORD"
 }
 
-@test "AC2.2 cancel at step 1 exits 2, writes not-configured, touches nothing" {
+@test "AC2.2 cancel at step 1 exits 2 not-configured, touches nothing" {
   cancel 1
   omakindle setup
   assert_failure 2
-  run jq -r .state "$(state_dir)/status.json"
-  assert_output not-configured
   assert_nothing_written
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
 
-@test "AC2.2 cancel at step 2 exits 2, writes not-configured, touches nothing" {
+@test "AC2.2 cancel at step 2 exits 2 not-configured, touches nothing" {
   answer 1 Other "$KINDLE" me@example.org "$PASSWORD"
   cancel 2
   omakindle setup
   assert_failure 2
-  run jq -r .state "$(state_dir)/status.json"
-  assert_output not-configured
   assert_nothing_written
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
@@ -209,12 +205,10 @@ SMTP_LOGIN=login-name"
   [ "$(grep -c -- '^--warning' "$SHIM_DIR/zenity.argv")" -eq 1 ]
 }
 
-@test "AC2.4 setup without a pending send writes idle, Kindle is set up" {
+@test "AC2.4 setup without a pending send exits 0 silently" {
   answer 1 Gmail "$KINDLE" "$EMAIL" "$PASSWORD"
   omakindle setup
   assert_success
-  run jq -c '{state, error_class, message}' "$(state_dir)/status.json"
-  assert_output '{"state":"idle","error_class":null,"message":"Kindle is set up"}'
   [ ! -e "$SHIM_DIR/notify-send.argv" ]
 }
 
@@ -248,14 +242,13 @@ SMTP_LOGIN=me@outlook.com"
   grep -qx PROVIDER=Gmail "$(config)"
 }
 
-@test "AC2.4 cancelling setup of a configured install leaves config and status alone" {
+@test "AC2.4 cancelling setup of a configured install leaves config alone" {
   configure
   cp "$(config)" "$BATS_TEST_TMPDIR/before"
   cancel 1
   omakindle setup
   assert_failure 2
   cmp "$(config)" "$BATS_TEST_TMPDIR/before"
-  [ ! -e "$(state_dir)/status.json" ]
 }
 
 @test "US2 send without config runs setup, then sends the file in the same invocation" {
@@ -268,8 +261,6 @@ SMTP_LOGIN=me@outlook.com"
   eval "set -- $(sed -n 2p "$SHIM_DIR/curl.argv")"
   [[ " $* " == *" --mail-rcpt $KINDLE "* ]]
   grep -q 'filename="book.epub"' "$SHIM_DIR/curl.upload"
-  run jq -c 'del(.at)' "$(state_dir)/status.json"
-  assert_output '{"state":"sent","error_class":null,"file":"book.epub","message":"Sent book.epub to reader@kindle.com"}'
   [ -e "$(config)" ]
 }
 
@@ -277,8 +268,6 @@ SMTP_LOGIN=me@outlook.com"
   cancel 1
   omakindle send "$(book)"
   assert_failure 2
-  run jq -c '{state, file}' "$(state_dir)/status.json"
-  assert_output '{"state":"not-configured","file":"book.epub"}'
   assert_nothing_written
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
@@ -315,7 +304,6 @@ SMTP_LOGIN=me@outlook.com"
   assert_failure 1
   [ -n "$stderr" ]
   [ -f "$XDG_CONFIG_HOME/omakindle" ] && [ ! -s "$XDG_CONFIG_HOME/omakindle" ]
-  run ! grep -qs '"Kindle is set up"' "$(state_dir)/status.json"
 }
 
 @test "lazy setup that cannot write the config ends the send as send-failed" {
@@ -324,8 +312,6 @@ SMTP_LOGIN=me@outlook.com"
   omakindle send "$(book)"
   assert_failure 6
   [ ! -s "$XDG_CONFIG_HOME/omakindle" ]
-  run jq -c '{state, error_class}' "$(state_dir)/status.json"
-  assert_output '{"state":"error","error_class":"send-failed"}'
   [ "$(wc -l <"$SHIM_DIR/curl.argv")" -eq 1 ]
 }
 
@@ -394,7 +380,7 @@ SHIM
   [ ! -e "$(config)" ]
 }
 
-@test "US2 a signal during the lazy setup test email ends with one notification and a status" {
+@test "US2 a signal during the lazy setup test email ends with one notification" {
   answer 1 Gmail "$KINDLE" "$EMAIL" "$PASSWORD"
   cat >"$SHIM_DIR/curl" <<SHIM
 #!/usr/bin/env bash
@@ -409,7 +395,5 @@ SHIM
   wait "$cli" || code=$?
   [ "$code" -eq 2 ]
   [ "$(wc -l <"$SHIM_DIR/notify-send.argv")" -eq 1 ]
-  run jq -r .state "$(state_dir)/status.json"
-  assert_output not-configured
   [ ! -e "$(config)" ]
 }

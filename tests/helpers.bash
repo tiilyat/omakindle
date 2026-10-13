@@ -40,3 +40,14 @@ SHIM
   done
   export PATH="$SHIM_DIR:$PATH"
 }
+
+menu() { echo "$XDG_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc"; }
+
+user_menu() {
+  mkdir -p "$(dirname "$(menu)")"
+  cat >"$(menu)"
+}
+
+omarchy_parse() {
+  sed -E '/^[[:space:]]*\/\//d' "$(menu)" | sed -z -E 's/,([[:space:]]*[]}])/\1/g' | jq -ec "$1"
+}

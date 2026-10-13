@@ -2,8 +2,6 @@
 
 load helpers
 
-menu() { echo "$XDG_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc"; }
-
 block() {
   cat <<BLOCK
 // omakindle:begin
@@ -14,21 +12,11 @@ block() {
 BLOCK
 }
 
-user_menu() {
-  mkdir -p "$(dirname "$(menu)")"
-  cat >"$(menu)"
-}
-
-plugin_copy() {
+cli_copy() {
   local dir="$BATS_TEST_TMPDIR/$1"
   mkdir -p "$dir/bin"
   cp "$OMAKINDLE" "$dir/bin/"
-  cp "$REPO/manifest.json" "$dir/"
   echo "$dir"
-}
-
-omarchy_parse() {
-  sed -E '/^[[:space:]]*\/\//d' "$(menu)" | sed -z -E 's/,([[:space:]]*[]}])/\1/g' | jq -ec "$1"
 }
 
 refused() {
@@ -75,9 +63,9 @@ JSONC
   omarchy_parse . >/dev/null
 }
 
-@test "AC7.2 user entries around the block survive and a moved plugin rewrites only the block" {
+@test "AC7.2 user entries around the block survive and a moved CLI rewrites only the block" {
   local moved
-  moved="$(plugin_copy moved)"
+  moved="$(cli_copy moved)"
   user_menu <<JSONC
 {
   "personal": {"icon":"x","label":"Personal"},
@@ -100,9 +88,9 @@ JSONC
   omarchy_parse . >/dev/null
 }
 
-@test "AC7.1 a plugin dir with a space is shell-quoted in the action" {
+@test "AC7.1 a CLI dir with a space is shell-quoted in the action" {
   local dir action
-  dir="$(plugin_copy "my plugins")"
+  dir="$(cli_copy "my cli")"
   run --separate-stderr "$dir/bin/omakindle" install-menu
   assert_success
   action="$(omarchy_parse '."kindle.send".action' | jq -r .)"
@@ -125,17 +113,29 @@ JSONC
   [ "$stderr" = "omarchy-menu.jsonc would not parse; left unchanged" ]
   cmp "$BATS_TEST_TMPDIR/before" "$(menu)"
   [ ! -e "$SHIM_DIR/omarchy.argv" ]
-  [ ! -e "$XDG_STATE_HOME/omakindle/menu-version" ]
 }
 
-@test "AC7.4 menu-version records the version of the manifest beside the CLI" {
-  local dir
-  dir="$(plugin_copy versioned)"
-  jq '.version = "9.8.7"' "$REPO/manifest.json" >"$dir/manifest.json"
-  run --separate-stderr "$dir/bin/omakindle" install-menu
+@test "AC3 a CLI in ~/.local/bin without a manifest writes its own absolute path" {
+  mkdir -p "$HOME/.local/bin"
+  cp "$OMAKINDLE" "$HOME/.local/bin/omakindle"
+  run --separate-stderr "$HOME/.local/bin/omakindle" install-menu
   assert_success
-  [ "$(cat "$XDG_STATE_HOME/omakindle/menu-version")" = 9.8.7 ]
-  [ "$(stat -c %a "$XDG_STATE_HOME/omakindle")" = 700 ]
+  diff <(printf '{\n'; block "$HOME/.local"; printf '}\n') "$(menu)"
+}
+
+@test "AC3 a symlinked bin dir keeps its logical path" {
+  mkdir -p "$BATS_TEST_TMPDIR/dots/bin" "$HOME/.local"
+  cp "$OMAKINDLE" "$BATS_TEST_TMPDIR/dots/bin/"
+  ln -s "$BATS_TEST_TMPDIR/dots/bin" "$HOME/.local/bin"
+  run --separate-stderr "$HOME/.local/bin/omakindle" install-menu
+  assert_success
+  diff <(printf '{\n'; block "$HOME/.local"; printf '}\n') "$(menu)"
+}
+
+@test "AC4 install-menu creates no state dir" {
+  run --separate-stderr "$OMAKINDLE" install-menu
+  assert_success
+  [ ! -e "$XDG_STATE_HOME/omakindle" ]
 }
 
 @test "successful write refreshes the omarchy menu" {

@@ -14,19 +14,13 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 
 ## sender CLI
 - Definition: the `omakindle` Bash script that picks a file, reads the secret, and delivers it over SMTP; the only code path that sends.
-- Boundary: is the executable both launch surfaces spawn, not a shell plugin kind and not a daemon.
+- Boundary: is the executable `~/.local/bin/omakindle` the menu entries spawn, installed by the install script; not a shell plugin and not a daemon.
 - Avoid: "service", "backend", "daemon".
-- Resolved ambiguity: a `service`-kind plugin was considered and rejected for v1 (#5).
-
-## status file
-- Definition: `$XDG_STATE_HOME/omakindle/status.json`, written by the sender CLI and watched by the bar widget.
-- Boundary: is the sole channel from sender to widget, not a log and not a config.
-- Avoid: "state file", "IPC status".
-- Resolved ambiguity: status is not pushed over shell IPC because the widget may be unloaded while a send runs (#5).
+- Resolved ambiguity: a `service`-kind plugin was rejected for v1 (#5) and again in ADR 0006.
 
 ## setup form
 - Definition: the two-step `zenity --forms` flow the sender CLI opens on the first send without a config and on `omakindle setup`; it writes config and secret only after a test email to the sender succeeds.
-- Boundary: is a CLI dialog, not a widget settings panel and not a plugin `schema` entry.
+- Boundary: is a CLI dialog, not a plugin `schema` entry.
 - Avoid: "wizard", "onboarding", "settings panel".
 - Resolved ambiguity: cancel or a failed test writes nothing (#6).
 
@@ -37,31 +31,25 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Resolved ambiguity: for presets the sender address and the login are the entered email (#6).
 
 ## send outcome
-- Definition: the final state the sender CLI records for one send: `sent` when the SMTP server accepts the message, otherwise one error class; mirrored by the CLI exit code and the status file.
+- Definition: the final state the sender CLI reports for one send: `sent` when the SMTP server accepts the message, otherwise one error class; mirrored by the CLI exit code and the notification.
 - Boundary: is SMTP acceptance, not delivery to the device; Amazon's later rejection email is outside it.
 - Avoid: "delivered", "success status".
 - Resolved ambiguity: `already-sending` (lock held) is an outcome of the invocation, not an error class of a send (#7).
 
 ## error class
-- Definition: one of `not-configured`, `file-rejected`, `auth-failed`, `network`, `send-failed`; each carries one user-facing text, one CLI exit code and one `error_class` value in the status file.
+- Definition: one of `not-configured`, `file-rejected`, `auth-failed`, `network`, `send-failed`; each carries one user-facing text and one CLI exit code.
 - Boundary: is the user-action grouping, not the curl exit code; several curl codes fold into one class.
 - Avoid: "error code", "failure reason".
 - Resolved ambiguity: a raw curl message alone was rejected because it does not tell the user what to do (#7).
 
-## widget panel
-- Definition: the popup the bar widget opens on click; it shows the status file's state, message, last file, time and error class, and offers `Send file…`, `Settings…` and, on error, `Log`.
-- Boundary: is a view of the one status object, not a history list and not a settings form; actions spawn the sender CLI.
-- Avoid: "dropdown", "popover", "history panel".
-- Resolved ambiguity: a single click-to-send icon without a panel was lofted and rejected (#8).
-
 ## install-menu
 - Definition: the `omakindle install-menu` subcommand that idempotently writes the `Kindle` submenu into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, pointing at the sender CLI by absolute path.
-- Boundary: is run by the widget on first load and again when the manifest `version` changes, not on every load; a user runs it only to restore a deleted entry.
+- Boundary: is run by the install script on every install and update; a user runs it by hand only to restore a deleted entry.
 - Avoid: "menu setup", "register menu", "postinstall".
-- Resolved ambiguity: the widget, not `omarchy plugin add`, triggers it because Omarchy has no plugin install hook (#9).
+- Resolved ambiguity: it writes the path it runs from (symlinks kept), not a plugin-folder path, so the entry follows wherever the install script put the CLI (ADR 0006).
 
-## menu-version marker
-- Definition: `$XDG_STATE_HOME/omakindle/menu-version`, the manifest `version` written by install-menu after a successful menu write; the bar widget runs install-menu when the marker is missing or differs from the manifest.
-- Boundary: is a state-dir file, not a plugin setting and not a file in the plugin folder.
-- Avoid: "installed version", "version cache".
-- Resolved ambiguity: it is written by install-menu, not by the widget, so a hand-run install-menu also refreshes it (ADR 0004).
+## install script
+- Definition: `install.sh` at the repository root, run as `curl -fsSL https://raw.githubusercontent.com/tiilyat/omakindle/main/install.sh | sh`; it downloads `bin/omakindle` from `main` (or `OMAKINDLE_REF`) to `~/.local/bin/omakindle` and runs install-menu.
+- Boundary: is the only install and update path, not an uninstaller and not a package.
+- Avoid: "installer", "bootstrap", "setup script".
+- Resolved ambiguity: update is the same line run again; there is no version check (ADR 0006).

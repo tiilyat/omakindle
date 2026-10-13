@@ -1,8 +1,8 @@
 # omakindle — Agent & Human Shipyard
 
 ## Project conventions
-- Stack: a Bash sender CLI (`bin/omakindle`) plus a Quickshell QML bar widget; nothing else runs on a stock Omarchy, so no runtime is added (ADR 0001).
-- Nothing is written inside the plugin folder at runtime; state goes to `$XDG_STATE_HOME/omakindle/`. Why: omarchy-shell watches the folder with inotify and a write there unloads every plugin widget.
+- Stack: one Bash sender CLI (`bin/omakindle`) installed to `~/.local/bin` by `install.sh`; nothing else runs on a stock Omarchy, so no runtime is added (ADR 0006).
+- Runtime state goes only to `$XDG_STATE_HOME/omakindle/`; the CLI writes nothing beside itself. Why: `~/.local/bin` is on PATH and is overwritten on every update.
 - Tests run through `tests/run` only; tools are faked by PATH shims, never by hooks in the CLI. Why: the shipped script must be the tested script.
 
 ## Architecture principles

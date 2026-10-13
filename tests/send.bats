@@ -25,23 +25,17 @@ book() {
   echo "$path"
 }
 
-status() { jq -c "$1" "$(state_dir)/status.json"; }
-
 stderr_is_one_line() {
   [ "$(printf '%s\n' "$stderr" | wc -l)" -eq 1 ]
   [ "$stderr" = "$1" ]
 }
 
-@test "AC1.1 send to an accepting server exits 0 and writes sent status" {
+@test "AC1.1 send to an accepting server exits 0" {
   configure
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_success
-  run status 'del(.at)'
-  assert_output '{"state":"sent","error_class":null,"file":"book.epub","message":"Sent book.epub to reader@kindle.com"}'
-  run status '[keys_unsorted[]]'
-  assert_output '["state","error_class","file","at","message"]'
-  run jq -r .at "$(state_dir)/status.json"
-  assert_output --regexp '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+  run ls -A "$(state_dir)"
+  assert_output "$(printf '%s\n' last-send.log send.lock)"
 }
 
 @test "AC1.1 without a file argument the zenity file dialog picks it" {
@@ -52,21 +46,6 @@ stderr_is_one_line() {
   eval "set -- $(sed -n 1p "$SHIM_DIR/zenity.argv")"
   [ "$*" = "--file-selection --title Send to Kindle" ]
   [ "$3" = "Send to Kindle" ]
-  run jq -r .state "$(state_dir)/status.json"
-  assert_output sent
-}
-
-@test "AC1.2 status reads sending with the same file before curl runs" {
-  configure
-  cat >"$SHIM_DIR/curl" <<SHIM
-#!/usr/bin/env bash
-cat >/dev/null
-cp "$XDG_STATE_HOME/omakindle/status.json" "$SHIM_DIR/curl.status"
-SHIM
-  run --separate-stderr "$OMAKINDLE" send "$(book)"
-  assert_success
-  run jq -c '{state, file}' "$SHIM_DIR/curl.status"
-  assert_output '{"state":"sending","file":"book.epub"}'
 }
 
 @test "AC1.3 success fires exactly one normal notification" {
@@ -99,18 +78,16 @@ SHIM
   echo 1 >"$SHIM_DIR/zenity.exit"
   run --separate-stderr "$OMAKINDLE" send
   assert_success
-  [ ! -e "$(state_dir)/status.json" ]
+  [ ! -e "$(state_dir)" ]
   [ ! -e "$SHIM_DIR/notify-send.argv" ]
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
 
-@test "missing config and a cancelled setup exit 2 with not-configured status" {
+@test "missing config and a cancelled setup exit 2 not-configured" {
   echo 1 >"$SHIM_DIR/zenity.exit"
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_failure 2
   stderr_is_one_line "Kindle is not set up yet"
-  run jq -c 'del(.at)' "$(state_dir)/status.json"
-  assert_output '{"state":"not-configured","error_class":"not-configured","file":"book.epub","message":"Kindle is not set up yet"}'
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
 
@@ -120,8 +97,6 @@ SHIM
   echo 1 >"$SHIM_DIR/secret-tool.exit"
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_failure 2
-  run jq -r .error_class "$(state_dir)/status.json"
-  assert_output not-configured
 }
 
 @test "secret is looked up in the keyring first" {
@@ -283,8 +258,8 @@ TYPES
   run --separate-stderr "$OMAKINDLE" send "$(book book.mobi)"
   assert_failure 3
   stderr_is_one_line "book.mobi: unsupported format or over 50 MB"
-  run jq -c 'del(.at)' "$(state_dir)/status.json"
-  assert_output '{"state":"error","error_class":"file-rejected","file":"book.mobi","message":"book.mobi: unsupported format or over 50 MB"}'
+  run ls -A "$(state_dir)"
+  assert_output send.lock
   [ ! -e "$SHIM_DIR/curl.argv" ]
   [ ! -e "$(state_dir)/last-send.log" ]
 }
@@ -307,8 +282,6 @@ TYPES
   truncate -s 52428801 "$path"
   run --separate-stderr "$OMAKINDLE" send "$path"
   assert_failure 3
-  run jq -r .error_class "$(state_dir)/status.json"
-  assert_output file-rejected
   [ ! -e "$SHIM_DIR/curl.argv" ]
   [ ! -e "$(state_dir)/last-send.log" ]
 }
@@ -326,8 +299,6 @@ TYPES
   run --separate-stderr "$OMAKINDLE" send "$BATS_TEST_TMPDIR/gone.epub"
   assert_failure 3
   stderr_is_one_line "gone.epub: unsupported format or over 50 MB"
-  run jq -r .error_class "$(state_dir)/status.json"
-  assert_output file-rejected
   [ ! -e "$SHIM_DIR/curl.argv" ]
   [ ! -e "$(state_dir)/last-send.log" ]
 }
@@ -343,14 +314,12 @@ TYPES
 }
 
 assert_curl_failure() {
-  local curl_code=$1 exit_code=$2 class=$3 message=$4
+  local curl_code=$1 exit_code=$2 message=$3
   rm -f "$SHIM_DIR/notify-send.argv"
   echo "$curl_code" >"$SHIM_DIR/curl.exit"
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_failure "$exit_code"
   stderr_is_one_line "$message"
-  run jq -c 'del(.at)' "$(state_dir)/status.json"
-  assert_output "$(jq -cn --arg c "$class" --arg m "$message" '{state:"error",error_class:$c,file:"book.epub",message:$m}')"
   [ "$(wc -l <"$SHIM_DIR/notify-send.argv")" -eq 1 ]
   eval "set -- $(sed -n 1p "$SHIM_DIR/notify-send.argv")"
   [ "$4 $5" = "critical $message" ]
@@ -358,20 +327,20 @@ assert_curl_failure() {
 
 @test "AC4.1 AC4.2 curl 67 is auth-failed, exit 4" {
   configure
-  assert_curl_failure 67 4 auth-failed "Mail login failed — check Settings…"
+  assert_curl_failure 67 4 "Mail login failed — check Settings…"
 }
 
 @test "AC4.1 AC4.2 curl 6 7 28 35 are network, exit 5" {
   configure
   local code
   for code in 6 7 28 35; do
-    assert_curl_failure "$code" 5 network "Could not reach smtp.gmail.com"
+    assert_curl_failure "$code" 5 "Could not reach smtp.gmail.com"
   done
 }
 
 @test "AC4.1 AC4.2 other curl failures are send-failed, exit 6" {
   configure
-  assert_curl_failure 56 6 send-failed "Mail server refused the message — see log"
+  assert_curl_failure 56 6 "Mail server refused the message — see log"
 }
 
 @test "AC4.3 last-send.log holds curl stderr with the password redacted" {
@@ -406,7 +375,6 @@ assert_curl_failure() {
   exec 9>&-
   assert_failure 7
   stderr_is_one_line "Another send is running"
-  [ ! -e "$(state_dir)/status.json" ]
   [ ! -e "$SHIM_DIR/notify-send.argv" ]
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
@@ -417,8 +385,6 @@ assert_curl_failure() {
   ln -s "$BATS_TEST_TMPDIR/big.bin" "$BATS_TEST_TMPDIR/big.pdf"
   run --separate-stderr "$OMAKINDLE" send "$BATS_TEST_TMPDIR/big.pdf"
   assert_failure 3
-  run jq -r .error_class "$(state_dir)/status.json"
-  assert_output file-rejected
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
 
@@ -450,7 +416,7 @@ CONF
   [ ! -e "$HOME/pwned" ]
 }
 
-@test "termination during curl kills curl, keeps its transcript, leaves send-failed status" {
+@test "termination during curl kills curl, keeps its transcript, exits send-failed" {
   configure
   cat >"$SHIM_DIR/curl" <<SHIM
 #!/usr/bin/env bash
@@ -466,8 +432,6 @@ SHIM
   wait "$cli" || code=$?
   [ "$code" -eq 6 ]
   [ "$(<"$BATS_TEST_TMPDIR/stderr")" = "Mail server refused the message — see log" ]
-  run jq -c '{state, error_class}' "$(state_dir)/status.json"
-  assert_output '{"state":"error","error_class":"send-failed"}'
   [ "$(wc -l <"$SHIM_DIR/notify-send.argv")" -eq 1 ]
   eval "set -- $(sed -n 1p "$SHIM_DIR/notify-send.argv")"
   [ "$4" = critical ]
