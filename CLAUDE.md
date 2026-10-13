@@ -23,6 +23,9 @@ Run this evaluation for every comment introduced in a commit. A comment survives
 
 Rewrite every RETAINED comment so that it states no historical reason and uses as few words as possible. Done when the comment answers only "why not otherwise" or "what the types cannot say". (Why: history lives in version control and decision records; a comment that repeats it drifts the moment the history moves on.)
 
+## Decision records
+- Index: docs/adr/ — one file per decision passing the ADR test (hard to reverse, surprising without context, a real tradeoff). Numbered `NNNN-<slug>.md`, status line first.
+
 ## Shared background
 - Glossary: GLOSSARY.md
 - Issue tracker: https://github.com/tiilyat/omakindle/issues. Maintainer communication authority for intake: issue comments and label changes on that repository.
