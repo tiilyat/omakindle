@@ -25,7 +25,7 @@ Rewrite every RETAINED comment so that it states no historical reason and uses a
 
 ## Shared background
 - Glossary: GLOSSARY.md
-- Issue tracker: GitHub (repository not created yet). Record the repository URL here right after `git init` and the first push. Maintainer communication authority for intake: issue comments and label changes on that repository.
+- Issue tracker: https://github.com/tiilyat/omakindle/issues. Maintainer communication authority for intake: issue comments and label changes on that repository.
 
 ## Agent guide
 - Delivery follows the canonical workflow plan → execute → review → verify; `/oh-my-claudecode:launch` is an optional governed delivery pipeline (opt-in, invoke explicitly)
