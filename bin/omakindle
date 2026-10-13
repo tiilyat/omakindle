@@ -12,21 +12,9 @@ log="$state_dir/last-send.log"
 extensions=" epub pdf doc docx txt rtf htm html png gif jpg jpeg bmp "
 max_bytes=52428800
 
-write_status() {
-  local tmp
-  tmp="$(mktemp "$state_dir/status.XXXXXX")"
-  jq -n --arg state "$1" --arg class "$2" --arg file "$name" --arg message "$3" \
-    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    'def nullable: if . == "" then null else . end;
-     {state: $state, error_class: ($class | nullable), file: ($file | nullable), at: $at, message: ($message | nullable)}' >"$tmp" ||
-    { rm -f "$tmp"; return 1; }
-  mv "$tmp" "$status"
-}
-
 classify() {
-  state=error
   case $1 in
-    not-configured) code=2 state=not-configured message="Kindle is not set up yet" ;;
+    not-configured) code=2 message="Kindle is not set up yet" ;;
     file-rejected) code=3 message="$name: unsupported format or over 50 MB" ;;
     auth-failed) code=4 message="Mail login failed — check Settings…" ;;
     network) code=5 message="Could not reach $SMTP_HOST" ;;
@@ -43,10 +31,9 @@ curl_class() {
 }
 
 fail() {
-  local class=$1 state code message
+  local class=$1 code message
   finished=1
   classify "$class"
-  write_status "$state" "$class" "$message"
   echo "$message" >&2
   notify-send -a omakindle -u critical "$message" "Log: $log" 2>/dev/null || true
   exit "$code"
@@ -187,7 +174,6 @@ cmd_send() {
     file="$(zenity --file-selection --title "Send to Kindle")" || exit 0
   fi
   name=${file##*/}
-  status="$state_dir/status.json"
   make_state_dir
 
   exec 9>"$state_dir/send.lock"
@@ -216,13 +202,11 @@ cmd_send() {
   trap 'interrupted=1; ${curl_pid:+kill "$curl_pid" 2>/dev/null}; exit 1' INT TERM HUP
   transcript="$(mktemp "$state_dir/transcript.XXXXXX")"
   build_mime "$KINDLE_ADDRESS" omakindle "$file"
-  write_status sending "" ""
 
   local code=0
   deliver "$KINDLE_ADDRESS" || fail send-failed
   [ -z "$interrupted" ] || fail send-failed
   [ "$code" -eq 0 ] || fail "$(curl_class "$code")"
-  write_status sent "" "Sent $name to $KINDLE_ADDRESS"
   finished=1
   notify-send -a omakindle -u normal "Sent" "$name to $KINDLE_ADDRESS" 2>/dev/null || true
 }
@@ -234,7 +218,7 @@ form() {
 }
 
 setup_form() {
-  local note alert="" text stored="" kept value providers p code state message curl_pid="" interrupted="" tmp
+  local note alert="" text stored="" kept value providers p code message curl_pid="" interrupted="" tmp
   local -a fields
   load_config
   if [ -r "$config_dir/config" ]; then
@@ -320,7 +304,7 @@ setup_form() {
 }
 
 cmd_setup() {
-  name="" status="$state_dir/status.json" password=""
+  password=""
   make_state_dir
   local result=0
   setup_form || result=$?
@@ -332,13 +316,11 @@ cmd_setup() {
     echo "Could not save the Kindle settings in $config_dir" >&2
     exit 1
   fi
-  write_status idle "" "Kindle is set up"
 }
 cmd_install_menu() {
-  local plugin_dir menu target cli new block tmp
-  plugin_dir="$(dirname "$(dirname "$(realpath "$0")")")"
+  local menu target cli new block tmp
   menu="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc"
-  cli="$(printf %q "$plugin_dir/bin/omakindle")"
+  cli="$(printf %q "$(realpath -s "$0")")"
   block="// omakindle:begin
 \"kindle\": {\"icon\":\"󰂺\",\"label\":\"Kindle\"},
 \"kindle.send\": $(jq -nc --arg a "$cli send" '{icon: "󰂺", label: "Send file…", action: $a}'),
@@ -400,8 +382,6 @@ cmd_install_menu() {
     exit 1
   fi
 
-  make_state_dir
-  jq -r .version "$plugin_dir/manifest.json" >"$state_dir/menu-version"
   if command -v omarchy >/dev/null; then
     timeout 5 omarchy menu refresh >/dev/null 2>&1 || true
   fi
