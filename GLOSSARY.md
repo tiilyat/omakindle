@@ -35,3 +35,15 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Boundary: fixes host and port only, never credentials or transport; transport is always STARTTLS (ADR 0002).
 - Avoid: "account type", "profile".
 - Resolved ambiguity: for presets the sender address and the login are the entered email (#6).
+
+## send outcome
+- Definition: the final state the sender CLI records for one send: `sent` when the SMTP server accepts the message, otherwise one error class; mirrored by the CLI exit code and the status file.
+- Boundary: is SMTP acceptance, not delivery to the device; Amazon's later rejection email is outside it.
+- Avoid: "delivered", "success status".
+- Resolved ambiguity: `already-sending` (lock held) is an outcome of the invocation, not an error class of a send (#7).
+
+## error class
+- Definition: one of `not-configured`, `file-rejected`, `auth-failed`, `network`, `send-failed`; each carries one user-facing text, one CLI exit code and one `error_class` value in the status file.
+- Boundary: is the user-action grouping, not the curl exit code; several curl codes fold into one class.
+- Avoid: "error code", "failure reason".
+- Resolved ambiguity: a raw curl message alone was rejected because it does not tell the user what to do (#7).
