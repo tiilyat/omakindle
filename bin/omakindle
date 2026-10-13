@@ -68,7 +68,7 @@ read_password() {
 }
 
 build_mime() {
-  local to=$1 body=$2 attach=${3:-} boundary attachment
+  local to=$1 body=$2 attach=${3:-} boundary attachment encoded disposition ext type
   boundary="omakindle-$(uuidgen)"
   {
     printf '%s\r\n' \
@@ -86,10 +86,37 @@ build_mime() {
       "$body"
     if [ -n "$attach" ]; then
       attachment="$(LC_ALL=C; name=${attach##*/}; name=${name//[^ -~]/_}; echo "${name//[\"\\]/_}")"
+      ext=${attach##*.}
+      case ${ext,,} in
+        epub) type=application/epub+zip ;;
+        pdf) type=application/pdf ;;
+        doc) type=application/msword ;;
+        docx) type=application/vnd.openxmlformats-officedocument.wordprocessingml.document ;;
+        txt) type=text/plain ;;
+        rtf) type=application/rtf ;;
+        htm | html) type=text/html ;;
+        png) type=image/png ;;
+        gif) type=image/gif ;;
+        jpg | jpeg) type=image/jpeg ;;
+        bmp) type=image/bmp ;;
+        *) type=application/octet-stream ;;
+      esac
+      encoded="$(LC_ALL=C; name=${attach##*/}; for ((i = 0; i < ${#name}; i++)); do
+        case ${name:i:1} in
+          [A-Za-z0-9._~-]) printf '%s' "${name:i:1}" ;;
+          *) printf '%%%02X' "'${name:i:1}" ;;
+        esac
+      done)"
+      disposition="Content-Disposition: attachment; filename=\"$attachment\";"
+      encoded="filename*=UTF-8''$encoded"
+      if [ $((${#disposition} + ${#encoded})) -ge 900 ]; then
+        disposition+=$'\r\n'
+      fi
+      disposition+=" $encoded"
       printf '%s\r\n' \
         "--$boundary" \
-        "Content-Type: application/octet-stream; name=\"$attachment\"" \
-        "Content-Disposition: attachment; filename=\"$attachment\"" \
+        "Content-Type: $type; name=\"$attachment\"" \
+        "$disposition" \
         "Content-Transfer-Encoding: base64" \
         ""
       base64 -w 76 "$attach" | sed 's/$/\r/'

@@ -174,7 +174,7 @@ SHIM
   assert_output 'user = "me@gmail.com:s3cr\"et\\pass"'
 }
 
-@test "MIME message is multipart/mixed with a base64 octet-stream attachment" {
+@test "MIME message is multipart/mixed with a base64 attachment" {
   configure
   local path
   path="$(book 'Kniga книга.epub')"
@@ -187,13 +187,88 @@ SHIM
   grep -qE $'^Date: [A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9:]{8} [+-][0-9]{4}\r$' "$mime"
   grep -qE $'^Message-ID: <[0-9a-f-]{36}@omakindle>\r$' "$mime"
   grep -q '^Content-Type: multipart/mixed; boundary=' "$mime"
-  grep -q '^Content-Type: application/octet-stream' "$mime"
+  grep -q $'^Content-Type: application/epub+zip; name="Kniga __________.epub"\r$' "$mime"
   grep -q '^Content-Transfer-Encoding: base64' "$mime"
   grep -q 'filename="Kniga __________.epub"' "$mime"
   run ! env LC_ALL=C grep -q '[^ -~[:space:]]' "$mime"
   local encoded
   encoded="$(sed -n '/^Content-Transfer-Encoding: base64/,/^--/p' "$mime" | sed '1,2d;$d' | tr -d '\r')"
   [ "$(printf '%s\n' "$encoded" | base64 -d)" = "book bytes" ]
+}
+
+disposition() {
+  configure
+  run --separate-stderr "$OMAKINDLE" send "$(book "$1")"
+  assert_success
+  sed -n '/^Content-Disposition: /,/^Content-Transfer-Encoding: /p' "$SHIM_DIR/curl.upload" | sed '$d'
+}
+
+@test "MIME attachment Content-Type follows the lowercase extension" {
+  configure
+  local ext type
+  while read -r ext type; do
+    run --separate-stderr "$OMAKINDLE" send "$(book "b.$ext")"
+    assert_success
+    grep -q "^Content-Type: $type; name=\"b.$ext\""$'\r$' "$SHIM_DIR/curl.upload"
+  done <<'TYPES'
+epub application/epub+zip
+EPUB application/epub+zip
+pdf application/pdf
+doc application/msword
+docx application/vnd.openxmlformats-officedocument.wordprocessingml.document
+txt text/plain
+rtf application/rtf
+htm text/html
+html text/html
+png image/png
+gif image/gif
+jpg image/jpeg
+JPEG image/jpeg
+bmp image/bmp
+TYPES
+}
+
+@test "MIME lines end in CRLF and base64 lines are at most 76 characters" {
+  configure
+  local path
+  path="$BATS_TEST_TMPDIR/big.pdf"
+  head -c 3000 /dev/urandom >"$path"
+  run --separate-stderr "$OMAKINDLE" send "$path"
+  assert_success
+  local mime="$SHIM_DIR/curl.upload"
+  run grep -c -v $'\r$' "$mime"
+  assert_output 0
+  local encoded
+  encoded="$(sed -n '/^Content-Transfer-Encoding: base64/,/^--/p' "$mime" | sed '1,2d;$d' | tr -d '\r')"
+  [ "$(printf '%s\n' "$encoded" | wc -l)" -gt 1 ]
+  run awk 'length > 76' <<<"$encoded"
+  assert_output ''
+  cmp <(printf '%s\n' "$encoded" | base64 -d) "$path"
+}
+
+@test "MIME Content-Disposition carries the RFC 2231 UTF-8 filename next to the ASCII fallback" {
+  run disposition 'Книга тест.epub'
+  assert_output $'Content-Disposition: attachment; filename="__________ ________.epub"; filename*=UTF-8\'\'%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0%20%D1%82%D0%B5%D1%81%D1%82.epub\r'
+  grep -q $'^Content-Type: application/epub+zip; name="__________ ________.epub"\r$' "$SHIM_DIR/curl.upload"
+}
+
+@test "MIME Content-Disposition for an ASCII name repeats it in filename*" {
+  run disposition 'book-1_v2.0~x.epub'
+  assert_output $'Content-Disposition: attachment; filename="book-1_v2.0~x.epub"; filename*=UTF-8\'\'book-1_v2.0~x.epub\r'
+}
+
+@test "MIME Content-Disposition percent-encodes quote, semicolon and other reserved bytes" {
+  run disposition $'O\'Neil; "a\\b" (c)*.epub'
+  assert_output $'Content-Disposition: attachment; filename="O\'Neil; _a_b_ (c)*.epub"; filename*=UTF-8\'\'O%27Neil%3B%20%22a%5Cb%22%20%28c%29%2A.epub\r'
+}
+
+@test "MIME Content-Disposition folds filename* onto a continuation line past 900 bytes" {
+  local name
+  name="$(printf 'ж%.0s' {1..120}).epub"
+  run disposition "$name"
+  assert_equal "${#lines[@]}" 2
+  assert_equal "${lines[0]}" "Content-Disposition: attachment; filename=\"$(printf '_%.0s' {1..240}).epub\";"$'\r'
+  assert_equal "${lines[1]}" " filename*=UTF-8''$(printf '%%D0%%B6%.0s' {1..120}).epub"$'\r'
 }
 
 @test "AC3.1 unsupported extension exits 3 before any connection" {
