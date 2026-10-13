@@ -47,3 +47,9 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Boundary: is the user-action grouping, not the curl exit code; several curl codes fold into one class.
 - Avoid: "error code", "failure reason".
 - Resolved ambiguity: a raw curl message alone was rejected because it does not tell the user what to do (#7).
+
+## widget panel
+- Definition: the popup the bar widget opens on click; it shows the status file's state, message, last file, time and error class, and offers `Send file…`, `Settings…` and, on error, `Log`.
+- Boundary: is a view of the one status object, not a history list and not a settings form; actions spawn the sender CLI.
+- Avoid: "dropdown", "popover", "history panel".
+- Resolved ambiguity: a single click-to-send icon without a panel was lofted and rejected (#8).
