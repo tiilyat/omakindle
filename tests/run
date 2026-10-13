@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-shellcheck bin/omakindle tests/helpers.bash tests/run tests/widget-scenario.sh
+shellcheck bin/omakindle install.sh tests/helpers.bash tests/run
 bats tests/ </dev/null
