@@ -23,3 +23,15 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Boundary: is the sole channel from sender to widget, not a log and not a config.
 - Avoid: "state file", "IPC status".
 - Resolved ambiguity: status is not pushed over shell IPC because the widget may be unloaded while a send runs (#5).
+
+## setup form
+- Definition: the two-step `zenity --forms` flow the sender CLI opens on the first send without a config and on `omakindle setup`; it writes config and secret only after a test email to the sender succeeds.
+- Boundary: is a CLI dialog, not a widget settings panel and not a plugin `schema` entry.
+- Avoid: "wizard", "onboarding", "settings panel".
+- Resolved ambiguity: cancel or a failed test writes nothing (#6).
+
+## provider preset
+- Definition: a named SMTP host and port pair (`Gmail`, `Outlook`) the setup form offers so the user enters only email and password; `Other` asks for host, port and login.
+- Boundary: fixes host and port only, never credentials or transport; transport is always STARTTLS (ADR 0002).
+- Avoid: "account type", "profile".
+- Resolved ambiguity: for presets the sender address and the login are the entered email (#6).
