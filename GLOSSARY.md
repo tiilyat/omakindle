@@ -56,6 +56,6 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 
 ## install-menu
 - Definition: the `omakindle install-menu` subcommand that idempotently writes the `Kindle` submenu into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, pointing at the sender CLI by absolute path.
-- Boundary: is run by the widget on first load and again when the manifest `version` changes, not on every load and not by the user.
+- Boundary: is run by the widget on first load and again when the manifest `version` changes, not on every load; a user runs it only to restore a deleted entry.
 - Avoid: "menu setup", "register menu", "postinstall".
 - Resolved ambiguity: the widget, not `omarchy plugin add`, triggers it because Omarchy has no plugin install hook (#9).

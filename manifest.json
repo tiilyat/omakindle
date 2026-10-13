@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.tiilyat.omakindle",
   "name": "omakindle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Widget.qml"
