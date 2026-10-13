@@ -6,11 +6,6 @@ usage() {
   exit 1
 }
 
-not_implemented() {
-  echo "omakindle: $1: not implemented" >&2
-  exit 1
-}
-
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omakindle"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omakindle"
 log="$state_dir/last-send.log"
@@ -28,16 +23,29 @@ write_status() {
   mv "$tmp" "$status"
 }
 
-fail() {
-  local class=$1 state=error code message
-  finished=1
-  case $class in
+classify() {
+  state=error
+  case $1 in
     not-configured) code=2 state=not-configured message="Kindle is not set up yet" ;;
     file-rejected) code=3 message="$name: unsupported format or over 50 MB" ;;
     auth-failed) code=4 message="Mail login failed — check Settings…" ;;
     network) code=5 message="Could not reach $SMTP_HOST" ;;
     send-failed) code=6 message="Mail server refused the message — see log" ;;
   esac
+}
+
+curl_class() {
+  case $1 in
+    67) echo auth-failed ;;
+    6 | 7 | 28 | 35) echo network ;;
+    *) echo send-failed ;;
+  esac
+}
+
+fail() {
+  local class=$1 state code message
+  finished=1
+  classify "$class"
   write_status "$state" "$class" "$message"
   echo "$message" >&2
   notify-send -a omakindle -u critical "$message" "Log: $log" 2>/dev/null || true
@@ -60,13 +68,12 @@ read_password() {
 }
 
 build_mime() {
-  local boundary attachment
+  local to=$1 body=$2 attach=${3:-} boundary attachment
   boundary="omakindle-$(uuidgen)"
-  attachment="$(LC_ALL=C; name=${name//[^ -~]/_}; echo "${name//[\"\\]/_}")"
   {
     printf '%s\r\n' \
       "From: $FROM" \
-      "To: $KINDLE_ADDRESS" \
+      "To: $to" \
       "Subject: omakindle" \
       "Date: $(date -R)" \
       "Message-ID: <$(uuidgen)@omakindle>" \
@@ -76,13 +83,17 @@ build_mime() {
       "--$boundary" \
       "Content-Type: text/plain; charset=us-ascii" \
       "" \
-      "omakindle" \
-      "--$boundary" \
-      "Content-Type: application/octet-stream; name=\"$attachment\"" \
-      "Content-Disposition: attachment; filename=\"$attachment\"" \
-      "Content-Transfer-Encoding: base64" \
-      ""
-    base64 -w 76 "$file" | sed 's/$/\r/'
+      "$body"
+    if [ -n "$attach" ]; then
+      attachment="$(LC_ALL=C; name=${attach##*/}; name=${name//[^ -~]/_}; echo "${name//[\"\\]/_}")"
+      printf '%s\r\n' \
+        "--$boundary" \
+        "Content-Type: application/octet-stream; name=\"$attachment\"" \
+        "Content-Disposition: attachment; filename=\"$attachment\"" \
+        "Content-Transfer-Encoding: base64" \
+        ""
+      base64 -w 76 "$attach" | sed 's/$/\r/'
+    fi
     printf '%s\r\n' "--$boundary--"
   } >"$mime"
 }
@@ -96,6 +107,37 @@ redact() {
     text=${text//"$secret"/[redacted]}
   done
   printf '%s\n' "$text"
+}
+
+deliver() {
+  local login=${SMTP_LOGIN//\\/\\\\} quoted=${password//\\/\\\\}
+  login=${login//\"/\\\"}
+  quoted=${quoted//\"/\\\"}
+  printf 'user = "%s:%s"\n' "$login" "$quoted" |
+    curl -sS -v --ssl-reqd --max-time 600 \
+      --url "smtp://$SMTP_HOST:$SMTP_PORT" \
+      --mail-from "$FROM" --mail-rcpt "$1" \
+      --upload-file "$mime" -K - 2>"$transcript" >/dev/null &
+  curl_pid=$!
+  trap 'interrupted=1; kill "$curl_pid" 2>/dev/null || true' INT TERM HUP
+  wait "$curl_pid" || code=$?
+  if [ -n "$interrupted" ]; then
+    wait "$curl_pid" || true
+  fi
+  redact "$(<"$transcript")" >"$log"
+}
+
+load_config() {
+  local line
+  unset PROVIDER KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN
+  [ -r "$config_dir/config" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case $line in
+      PROVIDER=* | KINDLE_ADDRESS=* | FROM=* | SMTP_HOST=* | SMTP_PORT=* | SMTP_LOGIN=*)
+        printf -v "${line%%=*}" '%s' "${line#*=}" ;;
+    esac
+  done <"$config_dir/config"
 }
 
 make_state_dir() {
@@ -119,58 +161,143 @@ cmd_send() {
   fi
 
   file_accepted || fail file-rejected
-  [ -r "$config_dir/config" ] || fail not-configured
-  local line key
-  unset PROVIDER KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line%$'\r'}
-    case $line in
-      PROVIDER=* | KINDLE_ADDRESS=* | FROM=* | SMTP_HOST=* | SMTP_PORT=* | SMTP_LOGIN=*)
-        printf -v "${line%%=*}" '%s' "${line#*=}" ;;
-    esac
-  done <"$config_dir/config"
+  password=""
+  local key result=0
+  if [ ! -r "$config_dir/config" ]; then
+    setup_form || result=$?
+    [ "$result" -ne 10 ] || fail not-configured
+    [ "$result" -eq 0 ] || fail send-failed
+  fi
+  load_config
   for key in KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN; do
     [ -n "${!key:-}" ] || fail not-configured
   done
-  read_password || fail not-configured
+  [ -n "$password" ] || read_password || fail not-configured
 
   mime="$(mktemp "$state_dir/mime.XXXXXX")"
   local curl_pid="" interrupted=""
   trap 'rm -f "$mime" ${transcript:+"$transcript"}; [ -n "${finished:-}" ] || fail send-failed' EXIT
   trap 'interrupted=1; ${curl_pid:+kill "$curl_pid" 2>/dev/null}; exit 1' INT TERM HUP
   transcript="$(mktemp "$state_dir/transcript.XXXXXX")"
-  build_mime
+  build_mime "$KINDLE_ADDRESS" omakindle "$file"
   write_status sending "" ""
 
-  local login=${SMTP_LOGIN//\\/\\\\} quoted=${password//\\/\\\\} code=0
-  login=${login//\"/\\\"}
-  quoted=${quoted//\"/\\\"}
-  printf 'user = "%s:%s"\n' "$login" "$quoted" |
-    curl -sS -v --ssl-reqd --max-time 600 \
-      --url "smtp://$SMTP_HOST:$SMTP_PORT" \
-      --mail-from "$FROM" --mail-rcpt "$KINDLE_ADDRESS" \
-      --upload-file "$mime" -K - 2>"$transcript" >/dev/null &
-  curl_pid=$!
-  trap 'interrupted=1; kill "$curl_pid" 2>/dev/null || true' INT TERM HUP
-  wait "$curl_pid" || code=$?
-  if [ -n "$interrupted" ]; then
-    wait "$curl_pid" || true
-  fi
-  redact "$(<"$transcript")" >"$log"
-
+  local code=0
+  deliver "$KINDLE_ADDRESS" || fail send-failed
   [ -z "$interrupted" ] || fail send-failed
-  case $code in
-    0) ;;
-    67) fail auth-failed ;;
-    6 | 7 | 28 | 35) fail network ;;
-    *) fail send-failed ;;
-  esac
+  [ "$code" -eq 0 ] || fail "$(curl_class "$code")"
   write_status sent "" "Sent $name to $KINDLE_ADDRESS"
   finished=1
   notify-send -a omakindle -u normal "Sent" "$name to $KINDLE_ADDRESS" 2>/dev/null || true
 }
 
-cmd_setup() { not_implemented setup; }
+form() {
+  local answers
+  answers="$(zenity --forms --title "Kindle setup" --text "$1" "${@:2}" --separator=$'\t')" || return 1
+  mapfile -t -d $'\t' fields < <(printf '%s' "$answers")
+}
+
+setup_form() {
+  local note alert="" text stored="" kept value providers p code state message curl_pid="" interrupted="" tmp
+  local -a fields
+  load_config
+  if [ -r "$config_dir/config" ]; then
+    read_password && stored=$password
+  fi
+  trap 'rm -f ${mime:+"$mime"} ${transcript:+"$transcript"}' EXIT
+  while :; do
+    note="Gmail and Outlook need an app password, not your account password."
+    kept=""
+    for value in "${KINDLE_ADDRESS:-}" "${FROM:-}"; do
+      [ -z "$value" ] || kept+=", $value"
+    done
+    [ -z "$kept" ] || note+=$'\n'"Leave a field empty to keep: ${kept#, }."
+    text="${alert:+$alert$'\n'}$note"
+    providers=${PROVIDER:-}
+    for p in Gmail Outlook Other; do
+      [ "$p" = "${PROVIDER:-}" ] || providers+="|$p"
+    done
+    form "$text" --add-combo Provider --combo-values "${providers#|}" \
+      --add-entry "Kindle address" --add-entry Email --add-password Password || return 10
+    PROVIDER=${fields[0]:-${PROVIDER:-}}
+    KINDLE_ADDRESS=${fields[1]:-${KINDLE_ADDRESS:-}}
+    FROM=${fields[2]:-${FROM:-}}
+    password=${fields[3]:-$password}
+    case $PROVIDER in
+      Gmail) SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_LOGIN=$FROM ;;
+      Outlook) SMTP_HOST=smtp.office365.com SMTP_PORT=587 SMTP_LOGIN=$FROM ;;
+      Other)
+        text="SMTP server (STARTTLS)"
+        [ -z "${SMTP_HOST:-}" ] || text+=$'\n'"Leave a field empty to keep: $SMTP_HOST, ${SMTP_PORT:-}, ${SMTP_LOGIN:-}."
+        form "$text" \
+          --add-entry "SMTP host" --add-entry "SMTP port" --add-entry Login || return 10
+        SMTP_HOST=${fields[0]:-${SMTP_HOST:-}}
+        SMTP_PORT=${fields[1]:-${SMTP_PORT:-}}
+        SMTP_LOGIN=${fields[2]:-${SMTP_LOGIN:-}}
+        ;;
+      *) PROVIDER="" ;;
+    esac
+    if [ -z "$PROVIDER" ] || [ -z "$KINDLE_ADDRESS" ] || [ -z "$FROM" ] || [ -z "$password" ] ||
+      [ -z "${SMTP_HOST:-}" ] || [ -z "${SMTP_PORT:-}" ] || [ -z "${SMTP_LOGIN:-}" ]; then
+      alert="Some required values are missing."
+      continue
+    fi
+
+    mime="$(mktemp "$state_dir/mime.XXXXXX")" || return 1
+    transcript="$(mktemp "$state_dir/transcript.XXXXXX")" || return 1
+    build_mime "$FROM" "omakindle setup test" || return 1
+    code=0
+    deliver "$FROM" || return 1
+    trap - INT TERM HUP
+    rm -f "$mime" "$transcript"
+    [ -z "$interrupted" ] || return 10
+    [ "$code" -ne 0 ] || break
+    classify "$(curl_class "$code")"
+    alert=$message
+  done
+  trap - EXIT
+
+  (umask 077; mkdir -p "$config_dir") || return 1
+  local cfg
+  cfg="$(mktemp "$config_dir/config.XXXXXX")" || return 1
+  printf '%s\n' "PROVIDER=$PROVIDER" "KINDLE_ADDRESS=$KINDLE_ADDRESS" "FROM=$FROM" \
+    "SMTP_HOST=$SMTP_HOST" "SMTP_PORT=$SMTP_PORT" "SMTP_LOGIN=$SMTP_LOGIN" >"$cfg" ||
+    { rm -f "$cfg"; return 1; }
+  if [ "$password" != "$stored" ]; then
+    if printf '%s' "$password" |
+      secret-tool store --label "omakindle SMTP password" application omakindle key smtp-password 2>/dev/null; then
+      rm -f "$config_dir/secret" || { rm -f "$cfg"; return 1; }
+    else
+      tmp="$(mktemp "$config_dir/secret.XXXXXX")" || { rm -f "$cfg"; return 1; }
+      if ! { printf '%s' "$password" >"$tmp" && mv "$tmp" "$config_dir/secret"; }; then
+        rm -f "$tmp" "$cfg"
+        return 1
+      fi
+      if [ ! -e "$state_dir/secret-fallback-warned" ]; then
+        zenity --warning --title "Kindle setup" \
+          --text "The keyring is unavailable, so the mail password is stored in $config_dir/secret." || true
+        touch "$state_dir/secret-fallback-warned"
+      fi
+    fi
+  fi
+  mv "$cfg" "$config_dir/config" || { rm -f "$cfg"; return 1; }
+}
+
+cmd_setup() {
+  name="" status="$state_dir/status.json" password=""
+  make_state_dir
+  local result=0
+  setup_form || result=$?
+  if [ "$result" -eq 10 ]; then
+    [ ! -r "$config_dir/config" ] || exit 2
+    fail not-configured
+  fi
+  if [ "$result" -ne 0 ]; then
+    echo "Could not save the Kindle settings in $config_dir" >&2
+    exit 1
+  fi
+  write_status idle "" "Kindle is set up"
+}
 cmd_install_menu() {
   local plugin_dir menu target cli new block tmp
   plugin_dir="$(dirname "$(dirname "$(realpath "$0")")")"

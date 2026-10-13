@@ -104,7 +104,8 @@ SHIM
   [ ! -e "$SHIM_DIR/curl.argv" ]
 }
 
-@test "missing config exits 2 with not-configured status" {
+@test "missing config and a cancelled setup exit 2 with not-configured status" {
+  echo 1 >"$SHIM_DIR/zenity.exit"
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_failure 2
   stderr_is_one_line "Kindle is not set up yet"
@@ -423,6 +424,7 @@ assert_one_critical_notification() {
 }
 
 @test "AC4.2 not-configured fires one critical notification" {
+  echo 1 >"$SHIM_DIR/zenity.exit"
   run --separate-stderr "$OMAKINDLE" send "$(book)"
   assert_failure 2
   assert_one_critical_notification "Kindle is not set up yet"

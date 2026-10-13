@@ -29,9 +29,11 @@ for arg in "\$@"; do
   [ "\$prev" = --upload-file ] && cp "\$arg" "\$base.upload"
   prev=\$arg
 done
-[ -f "\$base.out" ] && cat "\$base.out"
+n=\$((\$(cat "\$base.calls" 2>/dev/null || echo 0) + 1))
+echo "\$n" >"\$base.calls"
+if [ -f "\$base.out.\$n" ]; then cat "\$base.out.\$n"; elif [ -f "\$base.out" ]; then cat "\$base.out"; fi
 [ -f "\$base.err" ] && cat "\$base.err" >&2
-code="\$(cat "\$base.exit" 2>/dev/null)"
+code="\$(cat "\$base.exit.\$n" 2>/dev/null || cat "\$base.exit" 2>/dev/null)"
 exit "\${code:-0}"
 SHIM
     chmod +x "$SHIM_DIR/$name"

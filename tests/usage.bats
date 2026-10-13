@@ -10,13 +10,6 @@ assert_usage_exit() {
   [[ $stderr == *[Uu]sage* ]]
 }
 
-assert_not_implemented() {
-  run --separate-stderr "$OMAKINDLE" "$@"
-  assert_failure 1
-  assert_output ""
-  [[ $stderr == *"not implemented"* ]]
-}
-
 @test "no arguments prints one usage line to stderr and exits 1" {
   assert_usage_exit
 }
@@ -27,8 +20,4 @@ assert_not_implemented() {
 
 @test "unknown subcommand prints one usage line to stderr and exits 1" {
   assert_usage_exit bogus
-}
-
-@test "setup is not implemented yet" {
-  assert_not_implemented setup
 }
