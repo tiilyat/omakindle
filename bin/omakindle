@@ -67,8 +67,27 @@ read_password() {
   [ -n "$password" ]
 }
 
+with_name() (
+  LC_ALL=C
+  local header=$1 name=$2 chunk words=""
+  if [[ $name != *[^\ -~]* && $name != *[\"\\]* ]]; then
+    printf '%s"%s"' "$header" "$name"
+    return
+  fi
+  while [ -n "$name" ]; do
+    # 45 bytes is 60 base64 characters: a 72-character encoded-word, under RFC 2047's 75.
+    chunk=${name:0:45}
+    while [ ${#chunk} -gt 1 ] && [[ ${name:${#chunk}:1} == [$'\x80'-$'\xbf'] ]]; do
+      chunk=${chunk%?}
+    done
+    name=${name:${#chunk}}
+    words+="${words:+ }=?UTF-8?B?$(printf '%s' "$chunk" | base64 -w0)?="
+  done
+  printf '%s"%s"' "$header" "$words"
+)
+
 build_mime() {
-  local to=$1 body=$2 attach=${3:-} boundary attachment encoded disposition ext type
+  local to=$1 body=$2 attach=${3:-} boundary attachment ext type ctype cdisp
   boundary="omakindle-$(uuidgen)"
   {
     printf '%s\r\n' \
@@ -85,7 +104,7 @@ build_mime() {
       "" \
       "$body"
     if [ -n "$attach" ]; then
-      attachment="$(LC_ALL=C; name=${attach##*/}; name=${name//[^ -~]/_}; echo "${name//[\"\\]/_}")"
+      attachment=${attach##*/}
       ext=${attach##*.}
       case ${ext,,} in
         epub) type=application/epub+zip ;;
@@ -101,22 +120,12 @@ build_mime() {
         bmp) type=image/bmp ;;
         *) type=application/octet-stream ;;
       esac
-      encoded="$(LC_ALL=C; name=${attach##*/}; for ((i = 0; i < ${#name}; i++)); do
-        case ${name:i:1} in
-          [A-Za-z0-9._~-]) printf '%s' "${name:i:1}" ;;
-          *) printf '%%%02X' "'${name:i:1}" ;;
-        esac
-      done)"
-      disposition="Content-Disposition: attachment; filename=\"$attachment\";"
-      encoded="filename*=UTF-8''$encoded"
-      if [ $((${#disposition} + ${#encoded})) -ge 900 ]; then
-        disposition+=$'\r\n'
-      fi
-      disposition+=" $encoded"
+      ctype="$(with_name "Content-Type: $type; name=" "$attachment")"
+      cdisp="$(with_name "Content-Disposition: attachment; filename=" "$attachment")"
       printf '%s\r\n' \
         "--$boundary" \
-        "Content-Type: $type; name=\"$attachment\"" \
-        "$disposition" \
+        "$ctype" \
+        "$cdisp" \
         "Content-Transfer-Encoding: base64" \
         ""
       base64 -w 76 "$attach" | sed 's/$/\r/'

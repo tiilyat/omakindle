@@ -187,9 +187,9 @@ SHIM
   grep -qE $'^Date: [A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9:]{8} [+-][0-9]{4}\r$' "$mime"
   grep -qE $'^Message-ID: <[0-9a-f-]{36}@omakindle>\r$' "$mime"
   grep -q '^Content-Type: multipart/mixed; boundary=' "$mime"
-  grep -q $'^Content-Type: application/epub+zip; name="Kniga __________.epub"\r$' "$mime"
+  grep -q $'^Content-Type: application/epub+zip; name="=?UTF-8?B?S25pZ2Eg0LrQvdC40LPQsC5lcHVi?="\r$' "$mime"
   grep -q '^Content-Transfer-Encoding: base64' "$mime"
-  grep -q 'filename="Kniga __________.epub"' "$mime"
+  grep -q $'^Content-Disposition: attachment; filename="=?UTF-8?B?S25pZ2Eg0LrQvdC40LPQsC5lcHVi?="\r$' "$mime"
   run ! env LC_ALL=C grep -q '[^ -~[:space:]]' "$mime"
   local encoded
   encoded="$(sed -n '/^Content-Transfer-Encoding: base64/,/^--/p' "$mime" | sed '1,2d;$d' | tr -d '\r')"
@@ -246,29 +246,36 @@ TYPES
   cmp <(printf '%s\n' "$encoded" | base64 -d) "$path"
 }
 
-@test "MIME Content-Disposition carries the RFC 2231 UTF-8 filename next to the ASCII fallback" {
+@test "MIME attachment name with non-ASCII bytes is one RFC 2047 encoded-word in name and filename" {
   run disposition 'Книга тест.epub'
-  assert_output $'Content-Disposition: attachment; filename="__________ ________.epub"; filename*=UTF-8\'\'%D0%9A%D0%BD%D0%B8%D0%B3%D0%B0%20%D1%82%D0%B5%D1%81%D1%82.epub\r'
-  grep -q $'^Content-Type: application/epub+zip; name="__________ ________.epub"\r$' "$SHIM_DIR/curl.upload"
+  assert_output $'Content-Disposition: attachment; filename="=?UTF-8?B?0JrQvdC40LPQsCDRgtC10YHRgi5lcHVi?="\r'
+  grep -q $'^Content-Type: application/epub+zip; name="=?UTF-8?B?0JrQvdC40LPQsCDRgtC10YHRgi5lcHVi?="\r$' "$SHIM_DIR/curl.upload"
 }
 
-@test "MIME Content-Disposition for an ASCII name repeats it in filename*" {
+@test "MIME attachment name over 45 bytes splits into encoded-words that concatenate to Gmail's base64" {
+  run disposition 'Бесы_Федор_Михайлович_Достоевский.epub'
+  assert_output $'Content-Disposition: attachment; filename="=?UTF-8?B?0JHQtdGB0Ytf0KTQtdC00L7RgF/QnNC40YXQsNC50LvQvtCy0LjRh1/QlNC+?= =?UTF-8?B?0YHRgtC+0LXQstGB0LrQuNC5LmVwdWI=?="\r'
+  grep -q $'^Content-Type: application/epub+zip; name="=?UTF-8?B?0JHQtdGB0Ytf0KTQtdC00L7RgF/QnNC40YXQsNC50LvQvtCy0LjRh1/QlNC+?= =?UTF-8?B?0YHRgtC+0LXQstGB0LrQuNC5LmVwdWI=?="\r$' "$SHIM_DIR/curl.upload"
+}
+
+@test "MIME attachment ASCII name stays a plain quoted string" {
   run disposition 'book-1_v2.0~x.epub'
-  assert_output $'Content-Disposition: attachment; filename="book-1_v2.0~x.epub"; filename*=UTF-8\'\'book-1_v2.0~x.epub\r'
+  assert_output $'Content-Disposition: attachment; filename="book-1_v2.0~x.epub"\r'
+  grep -q $'^Content-Type: application/epub+zip; name="book-1_v2.0~x.epub"\r$' "$SHIM_DIR/curl.upload"
 }
 
-@test "MIME Content-Disposition percent-encodes quote, semicolon and other reserved bytes" {
+@test "MIME attachment name with quote or backslash is encoded" {
   run disposition $'O\'Neil; "a\\b" (c)*.epub'
-  assert_output $'Content-Disposition: attachment; filename="O\'Neil; _a_b_ (c)*.epub"; filename*=UTF-8\'\'O%27Neil%3B%20%22a%5Cb%22%20%28c%29%2A.epub\r'
+  assert_output $'Content-Disposition: attachment; filename="=?UTF-8?B?TydOZWlsOyAiYVxiIiAoYykqLmVwdWI=?="\r'
 }
 
-@test "MIME Content-Disposition folds filename* onto a continuation line past 900 bytes" {
+@test "MIME attachment name splits only at UTF-8 character boundaries" {
   local name
   name="$(printf 'ж%.0s' {1..120}).epub"
   run disposition "$name"
-  assert_equal "${#lines[@]}" 2
-  assert_equal "${lines[0]}" "Content-Disposition: attachment; filename=\"$(printf '_%.0s' {1..240}).epub\";"$'\r'
-  assert_equal "${lines[1]}" " filename*=UTF-8''$(printf '%%D0%%B6%.0s' {1..120}).epub"$'\r'
+  local word='=?UTF-8?B?0LbQttC20LbQttC20LbQttC20LbQttC20LbQttC20LbQttC20LbQttC20LY=?='
+  assert_output "Content-Disposition: attachment; filename=\"$word $word $word $word $word =?UTF-8?B?0LbQttC20LbQttC20LbQttC20LYuZXB1Yg==?=\""$'\r'
+  assert_equal "${#word}" 72
 }
 
 @test "AC3.1 unsupported extension exits 3 before any connection" {
@@ -523,4 +530,14 @@ SHIM
   assert_success
   run cat "$SHIM_DIR/curl.lock"
   assert_output held
+}
+
+@test "an attachment name of invalid UTF-8 continuation bytes still terminates" {
+  configure
+  local bad
+  bad="$BATS_TEST_TMPDIR/a$(printf '\x80%.0s' {1..50}).epub"
+  printf 'x' >"$bad"
+  run timeout 10 "$OMAKINDLE" send "$bad"
+  [ "$status" -eq 0 ]
+  grep -c '=?UTF-8?B?' "$SHIM_DIR/curl.upload" | grep -qx 2
 }
