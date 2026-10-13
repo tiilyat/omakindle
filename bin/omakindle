@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: omakindle send [file] | setup | install-menu" >&2
+  exit 1
+}
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omakindle"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omakindle"
+log="$state_dir/last-send.log"
+extensions=" epub pdf doc docx txt rtf htm html png gif jpg jpeg bmp "
+max_bytes=52428800
+
+write_status() {
+  local tmp
+  tmp="$(mktemp "$state_dir/status.XXXXXX")"
+  jq -n --arg state "$1" --arg class "$2" --arg file "$name" --arg message "$3" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    'def nullable: if . == "" then null else . end;
+     {state: $state, error_class: ($class | nullable), file: ($file | nullable), at: $at, message: ($message | nullable)}' >"$tmp" ||
+    { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$status"
+}
+
+classify() {
+  state=error
+  case $1 in
+    not-configured) code=2 state=not-configured message="Kindle is not set up yet" ;;
+    file-rejected) code=3 message="$name: unsupported format or over 50 MB" ;;
+    auth-failed) code=4 message="Mail login failed — check Settings…" ;;
+    network) code=5 message="Could not reach $SMTP_HOST" ;;
+    send-failed) code=6 message="Mail server refused the message — see log" ;;
+  esac
+}
+
+curl_class() {
+  case $1 in
+    67) echo auth-failed ;;
+    6 | 7 | 28 | 35) echo network ;;
+    *) echo send-failed ;;
+  esac
+}
+
+fail() {
+  local class=$1 state code message
+  finished=1
+  classify "$class"
+  write_status "$state" "$class" "$message"
+  echo "$message" >&2
+  notify-send -a omakindle -u critical "$message" "Log: $log" 2>/dev/null || true
+  exit "$code"
+}
+
+file_accepted() {
+  local ext=${name##*.}
+  [[ $name == *.* && $extensions == *" ${ext,,} "* ]] &&
+    [ -f "$file" ] && [ -r "$file" ] &&
+    [ "$(stat -L -c %s "$file")" -le "$max_bytes" ]
+}
+
+read_password() {
+  password="$(secret-tool lookup application omakindle key smtp-password 2>/dev/null || true)"
+  if [ -z "$password" ] && [ -r "$config_dir/secret" ]; then
+    password="$(<"$config_dir/secret")"
+  fi
+  [ -n "$password" ]
+}
+
+with_name() (
+  LC_ALL=C
+  local header=$1 name=$2 chunk words=""
+  if [[ $name != *[^\ -~]* && $name != *[\"\\]* ]]; then
+    printf '%s"%s"' "$header" "$name"
+    return
+  fi
+  while [ -n "$name" ]; do
+    # 45 bytes is 60 base64 characters: a 72-character encoded-word, under RFC 2047's 75.
+    chunk=${name:0:45}
+    while [ ${#chunk} -gt 1 ] && [[ ${name:${#chunk}:1} == [$'\x80'-$'\xbf'] ]]; do
+      chunk=${chunk%?}
+    done
+    name=${name:${#chunk}}
+    words+="${words:+ }=?UTF-8?B?$(printf '%s' "$chunk" | base64 -w0)?="
+  done
+  printf '%s"%s"' "$header" "$words"
+)
+
+build_mime() {
+  local to=$1 body=$2 attach=${3:-} boundary attachment ext type ctype cdisp
+  boundary="omakindle-$(uuidgen)"
+  {
+    printf '%s\r\n' \
+      "From: $FROM" \
+      "To: $to" \
+      "Subject: omakindle" \
+      "Date: $(date -R)" \
+      "Message-ID: <$(uuidgen)@omakindle>" \
+      "MIME-Version: 1.0" \
+      "Content-Type: multipart/mixed; boundary=\"$boundary\"" \
+      "" \
+      "--$boundary" \
+      "Content-Type: text/plain; charset=us-ascii" \
+      "" \
+      "$body"
+    if [ -n "$attach" ]; then
+      attachment=${attach##*/}
+      ext=${attach##*.}
+      case ${ext,,} in
+        epub) type=application/epub+zip ;;
+        pdf) type=application/pdf ;;
+        doc) type=application/msword ;;
+        docx) type=application/vnd.openxmlformats-officedocument.wordprocessingml.document ;;
+        txt) type=text/plain ;;
+        rtf) type=application/rtf ;;
+        htm | html) type=text/html ;;
+        png) type=image/png ;;
+        gif) type=image/gif ;;
+        jpg | jpeg) type=image/jpeg ;;
+        bmp) type=image/bmp ;;
+        *) type=application/octet-stream ;;
+      esac
+      ctype="$(with_name "Content-Type: $type; name=" "$attachment")"
+      cdisp="$(with_name "Content-Disposition: attachment; filename=" "$attachment")"
+      printf '%s\r\n' \
+        "--$boundary" \
+        "$ctype" \
+        "$cdisp" \
+        "Content-Transfer-Encoding: base64" \
+        ""
+      base64 -w 76 "$attach" | sed 's/$/\r/'
+    fi
+    printf '%s\r\n' "--$boundary--"
+  } >"$mime"
+}
+
+redact() {
+  local text=$1 secret
+  for secret in \
+    "$(printf '\0%s\0%s' "$SMTP_LOGIN" "$password" | base64 -w0)" \
+    "$(printf '%s' "$password" | base64 -w0)" \
+    "$password"; do
+    text=${text//"$secret"/[redacted]}
+  done
+  printf '%s\n' "$text"
+}
+
+deliver() {
+  local login=${SMTP_LOGIN//\\/\\\\} quoted=${password//\\/\\\\}
+  login=${login//\"/\\\"}
+  quoted=${quoted//\"/\\\"}
+  printf 'user = "%s:%s"\n' "$login" "$quoted" |
+    curl -sS -v --ssl-reqd --max-time 600 \
+      --url "smtp://$SMTP_HOST:$SMTP_PORT" \
+      --mail-from "$FROM" --mail-rcpt "$1" \
+      --upload-file "$mime" -K - 2>"$transcript" >/dev/null &
+  curl_pid=$!
+  trap 'interrupted=1; kill "$curl_pid" 2>/dev/null || true' INT TERM HUP
+  wait "$curl_pid" || code=$?
+  if [ -n "$interrupted" ]; then
+    wait "$curl_pid" || true
+  fi
+  redact "$(<"$transcript")" >"$log"
+}
+
+load_config() {
+  local line
+  unset PROVIDER KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN
+  [ -r "$config_dir/config" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case $line in
+      PROVIDER=* | KINDLE_ADDRESS=* | FROM=* | SMTP_HOST=* | SMTP_PORT=* | SMTP_LOGIN=*)
+        printf -v "${line%%=*}" '%s' "${line#*=}" ;;
+    esac
+  done <"$config_dir/config"
+}
+
+make_state_dir() {
+  (umask 077; mkdir -p "$state_dir")
+  chmod 700 "$state_dir"
+}
+
+cmd_send() {
+  file=${1:-}
+  if [ -z "$file" ]; then
+    file="$(zenity --file-selection --title "Send to Kindle")" || exit 0
+  fi
+  name=${file##*/}
+  status="$state_dir/status.json"
+  make_state_dir
+
+  exec 9>"$state_dir/send.lock"
+  if ! flock -n 9; then
+    echo "Another send is running" >&2
+    exit 7
+  fi
+
+  file_accepted || fail file-rejected
+  password=""
+  local key result=0
+  if [ ! -r "$config_dir/config" ]; then
+    setup_form || result=$?
+    [ "$result" -ne 10 ] || fail not-configured
+    [ "$result" -eq 0 ] || fail send-failed
+  fi
+  load_config
+  for key in KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN; do
+    [ -n "${!key:-}" ] || fail not-configured
+  done
+  [ -n "$password" ] || read_password || fail not-configured
+
+  mime="$(mktemp "$state_dir/mime.XXXXXX")"
+  local curl_pid="" interrupted=""
+  trap 'rm -f "$mime" ${transcript:+"$transcript"}; [ -n "${finished:-}" ] || fail send-failed' EXIT
+  trap 'interrupted=1; ${curl_pid:+kill "$curl_pid" 2>/dev/null}; exit 1' INT TERM HUP
+  transcript="$(mktemp "$state_dir/transcript.XXXXXX")"
+  build_mime "$KINDLE_ADDRESS" omakindle "$file"
+  write_status sending "" ""
+
+  local code=0
+  deliver "$KINDLE_ADDRESS" || fail send-failed
+  [ -z "$interrupted" ] || fail send-failed
+  [ "$code" -eq 0 ] || fail "$(curl_class "$code")"
+  write_status sent "" "Sent $name to $KINDLE_ADDRESS"
+  finished=1
+  notify-send -a omakindle -u normal "Sent" "$name to $KINDLE_ADDRESS" 2>/dev/null || true
+}
+
+form() {
+  local answers
+  answers="$(zenity --forms --title "Kindle setup" --text "$1" "${@:2}" --separator=$'\t')" || return 1
+  mapfile -t -d $'\t' fields < <(printf '%s' "$answers")
+}
+
+setup_form() {
+  local note alert="" text stored="" kept value providers p code state message curl_pid="" interrupted="" tmp
+  local -a fields
+  load_config
+  if [ -r "$config_dir/config" ]; then
+    read_password && stored=$password
+  fi
+  trap 'rm -f ${mime:+"$mime"} ${transcript:+"$transcript"}' EXIT
+  while :; do
+    note="Gmail and Outlook need an app password, not your account password."
+    kept=""
+    for value in "${KINDLE_ADDRESS:-}" "${FROM:-}"; do
+      [ -z "$value" ] || kept+=", $value"
+    done
+    [ -z "$kept" ] || note+=$'\n'"Leave a field empty to keep: ${kept#, }."
+    text="${alert:+$alert$'\n'}$note"
+    providers=${PROVIDER:-}
+    for p in Gmail Outlook Other; do
+      [ "$p" = "${PROVIDER:-}" ] || providers+="|$p"
+    done
+    form "$text" --add-combo Provider --combo-values "${providers#|}" \
+      --add-entry "Kindle address" --add-entry Email --add-password Password || return 10
+    PROVIDER=${fields[0]:-${PROVIDER:-}}
+    KINDLE_ADDRESS=${fields[1]:-${KINDLE_ADDRESS:-}}
+    FROM=${fields[2]:-${FROM:-}}
+    password=${fields[3]:-$password}
+    case $PROVIDER in
+      Gmail) SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_LOGIN=$FROM ;;
+      Outlook) SMTP_HOST=smtp.office365.com SMTP_PORT=587 SMTP_LOGIN=$FROM ;;
+      Other)
+        text="SMTP server (STARTTLS)"
+        [ -z "${SMTP_HOST:-}" ] || text+=$'\n'"Leave a field empty to keep: $SMTP_HOST, ${SMTP_PORT:-}, ${SMTP_LOGIN:-}."
+        form "$text" \
+          --add-entry "SMTP host" --add-entry "SMTP port" --add-entry Login || return 10
+        SMTP_HOST=${fields[0]:-${SMTP_HOST:-}}
+        SMTP_PORT=${fields[1]:-${SMTP_PORT:-}}
+        SMTP_LOGIN=${fields[2]:-${SMTP_LOGIN:-}}
+        ;;
+      *) PROVIDER="" ;;
+    esac
+    if [ -z "$PROVIDER" ] || [ -z "$KINDLE_ADDRESS" ] || [ -z "$FROM" ] || [ -z "$password" ] ||
+      [ -z "${SMTP_HOST:-}" ] || [ -z "${SMTP_PORT:-}" ] || [ -z "${SMTP_LOGIN:-}" ]; then
+      alert="Some required values are missing."
+      continue
+    fi
+
+    mime="$(mktemp "$state_dir/mime.XXXXXX")" || return 1
+    transcript="$(mktemp "$state_dir/transcript.XXXXXX")" || return 1
+    build_mime "$FROM" "omakindle setup test" || return 1
+    code=0
+    deliver "$FROM" || return 1
+    trap - INT TERM HUP
+    rm -f "$mime" "$transcript"
+    [ -z "$interrupted" ] || return 10
+    [ "$code" -ne 0 ] || break
+    classify "$(curl_class "$code")"
+    alert=$message
+  done
+  trap - EXIT
+
+  (umask 077; mkdir -p "$config_dir") || return 1
+  local cfg
+  cfg="$(mktemp "$config_dir/config.XXXXXX")" || return 1
+  printf '%s\n' "PROVIDER=$PROVIDER" "KINDLE_ADDRESS=$KINDLE_ADDRESS" "FROM=$FROM" \
+    "SMTP_HOST=$SMTP_HOST" "SMTP_PORT=$SMTP_PORT" "SMTP_LOGIN=$SMTP_LOGIN" >"$cfg" ||
+    { rm -f "$cfg"; return 1; }
+  if [ "$password" != "$stored" ]; then
+    if printf '%s' "$password" |
+      secret-tool store --label "omakindle SMTP password" application omakindle key smtp-password 2>/dev/null; then
+      rm -f "$config_dir/secret" || { rm -f "$cfg"; return 1; }
+    else
+      tmp="$(mktemp "$config_dir/secret.XXXXXX")" || { rm -f "$cfg"; return 1; }
+      if ! { printf '%s' "$password" >"$tmp" && mv "$tmp" "$config_dir/secret"; }; then
+        rm -f "$tmp" "$cfg"
+        return 1
+      fi
+      if [ ! -e "$state_dir/secret-fallback-warned" ]; then
+        zenity --warning --title "Kindle setup" \
+          --text "The keyring is unavailable, so the mail password is stored in $config_dir/secret." || true
+        touch "$state_dir/secret-fallback-warned"
+      fi
+    fi
+  fi
+  mv "$cfg" "$config_dir/config" || { rm -f "$cfg"; return 1; }
+}
+
+cmd_setup() {
+  name="" status="$state_dir/status.json" password=""
+  make_state_dir
+  local result=0
+  setup_form || result=$?
+  if [ "$result" -eq 10 ]; then
+    [ ! -r "$config_dir/config" ] || exit 2
+    fail not-configured
+  fi
+  if [ "$result" -ne 0 ]; then
+    echo "Could not save the Kindle settings in $config_dir" >&2
+    exit 1
+  fi
+  write_status idle "" "Kindle is set up"
+}
+cmd_install_menu() {
+  local plugin_dir menu target cli new block tmp
+  plugin_dir="$(dirname "$(dirname "$(realpath "$0")")")"
+  menu="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc"
+  cli="$(printf %q "$plugin_dir/bin/omakindle")"
+  block="// omakindle:begin
+\"kindle\": {\"icon\":\"󰂺\",\"label\":\"Kindle\"},
+\"kindle.send\": $(jq -nc --arg a "$cli send" '{icon: "󰂺", label: "Send file…", action: $a}'),
+\"kindle.settings\": $(jq -nc --arg a "$cli setup" '{icon: "󰒓", label: "Settings…", action: $a}'),
+// omakindle:end"
+
+  mkdir -p "${menu%/*}"
+  new="$(block=$block awk '
+    { line[NR] = $0 }
+    /^[ \t]*\/\/ omakindle:begin[ \t]*$/ { begins++; if (!begin) begin = NR }
+    /^[ \t]*\/\/ omakindle:end[ \t]*$/ { ends++; if (!end) end = NR }
+    !/^[ \t]*\/\// && /}/ { brace = NR }
+    END {
+      if (begins + ends && !(begins == 1 && ends == 1 && begin < end)) exit 3
+      if (begin) {
+        for (i = 1; i < begin; i++) print line[i]
+        print ENVIRON["block"]
+        for (i = end + 1; i <= NR; i++) print line[i]
+        exit
+      }
+      if (!brace) {
+        for (i = 1; i <= NR; i++) print line[i]
+        print ENVIRON["block"]
+        exit
+      }
+      col = match(line[brace], /}[^}]*$/)
+      head = substr(line[brace], 1, col - 1)
+      for (i = 1; i < brace; i++) print line[i]
+      if (head ~ /[^ \t\r]/) { print head; prev = head; tail = substr(line[brace], col) }
+      else {
+        tail = line[brace]
+        for (i = brace - 1; i > 0 && (line[i] ~ /^[ \t]*$/ || line[i] ~ /^[ \t]*\/\//); i--) ;
+        prev = line[i]
+      }
+      sub(/[ \t\r]+$/, "", prev)
+      if (prev !~ /[{,]$/) print ","
+      print ENVIRON["block"]
+      print tail
+      for (i = brace + 1; i <= NR; i++) print line[i]
+    }' < <(if [ -s "$menu" ]; then cat "$menu"; else printf '{\n}\n'; fi))" || {
+    echo "omarchy-menu.jsonc has unbalanced omakindle markers; left unchanged" >&2
+    exit 1
+  }
+
+  if [[ $new == $'\xef\xbb\xbf'* ]] ||
+    ! sed -E '/^[[:space:]]*\/\//d' <<<"$new" | sed -z -E 's/,([[:space:]]*[]}])/\1/g' | jq -se 'length == 1' >/dev/null 2>&1; then
+    echo "omarchy-menu.jsonc would not parse; left unchanged" >&2
+    exit 1
+  fi
+  target="$(realpath "$menu")"
+  tmp="$(mktemp "$target.XXXXXX")"
+  if [ -e "$target" ]; then
+    chmod --reference="$target" "$tmp"
+  else
+    chmod "$(printf %o $((0666 & ~$(umask))))" "$tmp"
+  fi
+  if ! { printf '%s\n' "$new" >"$tmp" && mv "$tmp" "$target"; }; then
+    rm -f "$tmp"
+    exit 1
+  fi
+
+  make_state_dir
+  jq -r .version "$plugin_dir/manifest.json" >"$state_dir/menu-version"
+  if command -v omarchy >/dev/null; then
+    timeout 5 omarchy menu refresh >/dev/null 2>&1 || true
+  fi
+}
+
+case "${1:-}" in
+  send) shift; cmd_send "$@" ;;
+  setup) shift; cmd_setup "$@" ;;
+  install-menu) shift; cmd_install_menu "$@" ;;
+  *) usage ;;
+esac
