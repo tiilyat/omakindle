@@ -59,3 +59,9 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Boundary: is run by the widget on first load and again when the manifest `version` changes, not on every load; a user runs it only to restore a deleted entry.
 - Avoid: "menu setup", "register menu", "postinstall".
 - Resolved ambiguity: the widget, not `omarchy plugin add`, triggers it because Omarchy has no plugin install hook (#9).
+
+## menu-version marker
+- Definition: `$XDG_STATE_HOME/omakindle/menu-version`, the manifest `version` written by install-menu after a successful menu write; the bar widget runs install-menu when the marker is missing or differs from the manifest.
+- Boundary: is a state-dir file, not a plugin setting and not a file in the plugin folder.
+- Avoid: "installed version", "version cache".
+- Resolved ambiguity: it is written by install-menu, not by the widget, so a hand-run install-menu also refreshes it (ADR 0004).

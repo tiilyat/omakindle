@@ -1,7 +1,9 @@
 # omakindle — Agent & Human Shipyard
 
 ## Project conventions
-- Tech stack is not chosen yet (as of 2026-10-13). When the first package manifest lands, record here only what the manifest cannot tell: naming rules, layout conventions, and the reason behind each. Done when every bullet in this section answers "why".
+- Stack: a Bash sender CLI (`bin/omakindle`) plus a Quickshell QML bar widget; nothing else runs on a stock Omarchy, so no runtime is added (ADR 0001).
+- Nothing is written inside the plugin folder at runtime; state goes to `$XDG_STATE_HOME/omakindle/`. Why: omarchy-shell watches the folder with inotify and a write there unloads every plugin widget.
+- Tests run through `tests/run` only; tools are faked by PATH shims, never by hooks in the CLI. Why: the shipped script must be the tested script.
 
 ## Architecture principles
 - Not yet sedimented. Add a principle here the first time a review corrects the same mistake twice; each principle states the observable condition and its why. Done when a reviewer can judge pass/fail from the text alone.
@@ -22,6 +24,9 @@ Run this evaluation for every comment introduced in a commit. A comment survives
 | uncertain which row applies | DROP |
 
 Rewrite every RETAINED comment so that it states no historical reason and uses as few words as possible. Done when the comment answers only "why not otherwise" or "what the types cannot say". (Why: history lives in version control and decision records; a comment that repeats it drifts the moment the history moves on.)
+
+## Standards
+- Index: docs/standards/ — `process.md` (writing files, tests, live checks). A reviewer checks every rule there on each diff.
 
 ## Decision records
 - Index: docs/adr/ — one file per decision passing the ADR test (hard to reverse, surprising without context, a real tradeoff). Numbered `NNNN-<slug>.md`, status line first.
