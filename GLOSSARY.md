@@ -53,3 +53,9 @@ One entry per term: definition, boundaries, one resolved ambiguity. Agents write
 - Boundary: is a view of the one status object, not a history list and not a settings form; actions spawn the sender CLI.
 - Avoid: "dropdown", "popover", "history panel".
 - Resolved ambiguity: a single click-to-send icon without a panel was lofted and rejected (#8).
+
+## install-menu
+- Definition: the `omakindle install-menu` subcommand that idempotently writes the `Kindle` submenu into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, pointing at the sender CLI by absolute path.
+- Boundary: is run by the widget on first load and again when the manifest `version` changes, not on every load and not by the user.
+- Avoid: "menu setup", "register menu", "postinstall".
+- Resolved ambiguity: the widget, not `omarchy plugin add`, triggers it because Omarchy has no plugin install hook (#9).
