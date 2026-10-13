@@ -98,6 +98,11 @@ redact() {
   printf '%s\n' "$text"
 }
 
+make_state_dir() {
+  (umask 077; mkdir -p "$state_dir")
+  chmod 700 "$state_dir"
+}
+
 cmd_send() {
   file=${1:-}
   if [ -z "$file" ]; then
@@ -105,8 +110,7 @@ cmd_send() {
   fi
   name=${file##*/}
   status="$state_dir/status.json"
-  (umask 077; mkdir -p "$state_dir")
-  chmod 700 "$state_dir"
+  make_state_dir
 
   exec 9>"$state_dir/send.lock"
   if ! flock -n 9; then
@@ -167,7 +171,78 @@ cmd_send() {
 }
 
 cmd_setup() { not_implemented setup; }
-cmd_install_menu() { not_implemented install-menu; }
+cmd_install_menu() {
+  local plugin_dir menu target cli new block tmp
+  plugin_dir="$(dirname "$(dirname "$(realpath "$0")")")"
+  menu="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/extensions/omarchy-menu.jsonc"
+  cli="$(printf %q "$plugin_dir/bin/omakindle")"
+  block="// omakindle:begin
+\"kindle\": {\"icon\":\"󰂺\",\"label\":\"Kindle\"},
+\"kindle.send\": $(jq -nc --arg a "$cli send" '{icon: "󰂺", label: "Send file…", action: $a}'),
+\"kindle.settings\": $(jq -nc --arg a "$cli setup" '{icon: "󰒓", label: "Settings…", action: $a}'),
+// omakindle:end"
+
+  mkdir -p "${menu%/*}"
+  new="$(block=$block awk '
+    { line[NR] = $0 }
+    /^[ \t]*\/\/ omakindle:begin[ \t]*$/ { begins++; if (!begin) begin = NR }
+    /^[ \t]*\/\/ omakindle:end[ \t]*$/ { ends++; if (!end) end = NR }
+    !/^[ \t]*\/\// && /}/ { brace = NR }
+    END {
+      if (begins + ends && !(begins == 1 && ends == 1 && begin < end)) exit 3
+      if (begin) {
+        for (i = 1; i < begin; i++) print line[i]
+        print ENVIRON["block"]
+        for (i = end + 1; i <= NR; i++) print line[i]
+        exit
+      }
+      if (!brace) {
+        for (i = 1; i <= NR; i++) print line[i]
+        print ENVIRON["block"]
+        exit
+      }
+      col = match(line[brace], /}[^}]*$/)
+      head = substr(line[brace], 1, col - 1)
+      for (i = 1; i < brace; i++) print line[i]
+      if (head ~ /[^ \t\r]/) { print head; prev = head; tail = substr(line[brace], col) }
+      else {
+        tail = line[brace]
+        for (i = brace - 1; i > 0 && (line[i] ~ /^[ \t]*$/ || line[i] ~ /^[ \t]*\/\//); i--) ;
+        prev = line[i]
+      }
+      sub(/[ \t\r]+$/, "", prev)
+      if (prev !~ /[{,]$/) print ","
+      print ENVIRON["block"]
+      print tail
+      for (i = brace + 1; i <= NR; i++) print line[i]
+    }' < <(if [ -s "$menu" ]; then cat "$menu"; else printf '{\n}\n'; fi))" || {
+    echo "omarchy-menu.jsonc has unbalanced omakindle markers; left unchanged" >&2
+    exit 1
+  }
+
+  if [[ $new == $'\xef\xbb\xbf'* ]] ||
+    ! sed -E '/^[[:space:]]*\/\//d' <<<"$new" | sed -z -E 's/,([[:space:]]*[]}])/\1/g' | jq -se 'length == 1' >/dev/null 2>&1; then
+    echo "omarchy-menu.jsonc would not parse; left unchanged" >&2
+    exit 1
+  fi
+  target="$(realpath "$menu")"
+  tmp="$(mktemp "$target.XXXXXX")"
+  if [ -e "$target" ]; then
+    chmod --reference="$target" "$tmp"
+  else
+    chmod "$(printf %o $((0666 & ~$(umask))))" "$tmp"
+  fi
+  if ! { printf '%s\n' "$new" >"$tmp" && mv "$tmp" "$target"; }; then
+    rm -f "$tmp"
+    exit 1
+  fi
+
+  make_state_dir
+  jq -r .version "$plugin_dir/manifest.json" >"$state_dir/menu-version"
+  if command -v omarchy >/dev/null; then
+    timeout 5 omarchy menu refresh >/dev/null 2>&1 || true
+  fi
+}
 
 case "${1:-}" in
   send) shift; cmd_send "$@" ;;

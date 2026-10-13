@@ -18,7 +18,7 @@ setup() {
   mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$SHIM_DIR"
 
   local name
-  for name in curl zenity secret-tool notify-send; do
+  for name in curl zenity secret-tool notify-send omarchy; do
     cat >"$SHIM_DIR/$name" <<SHIM
 #!/usr/bin/env bash
 base="$SHIM_DIR/$name"

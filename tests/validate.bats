@@ -3,7 +3,7 @@
 load helpers
 
 @test "plugin folder passes omarchy plugin validate" {
-  run omarchy plugin validate "$REPO"
+  PATH=${PATH#"$SHIM_DIR:"} run omarchy plugin validate "$REPO"
   assert_success
 }
 

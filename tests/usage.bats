@@ -32,7 +32,3 @@ assert_not_implemented() {
 @test "setup is not implemented yet" {
   assert_not_implemented setup
 }
-
-@test "install-menu is not implemented yet" {
-  assert_not_implemented install-menu
-}
