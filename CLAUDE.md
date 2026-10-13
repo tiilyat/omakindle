@@ -1,0 +1,33 @@
+# omakindle — Agent & Human Shipyard
+
+## Project conventions
+- Tech stack is not chosen yet (as of 2026-10-13). When the first package manifest lands, record here only what the manifest cannot tell: naming rules, layout conventions, and the reason behind each. Done when every bullet in this section answers "why".
+
+## Architecture principles
+- Not yet sedimented. Add a principle here the first time a review corrects the same mistake twice; each principle states the observable condition and its why. Done when a reviewer can judge pass/fail from the text alone.
+
+## Code comments
+Run this evaluation for every comment introduced in a commit. A comment survives only if it carries knowledge the code cannot express; everything else is weight the reader pays for on every read.
+
+| Comment describes | Verdict |
+|---|---|
+| function behavior that is obvious from the code | DROP |
+| historical changes, including ADR and ticket references | DROP |
+| a border condition | DROP |
+| an invariant / precondition / postcondition expressible in TypeScript | DROP |
+| why we cannot do it another way | RETAIN |
+| an invariant / precondition / postcondition not expressible in TypeScript | RETAIN |
+| repetition of the same pattern ("same as above") | DROP |
+| docblock description | DROP |
+| uncertain which row applies | DROP |
+
+Rewrite every RETAINED comment so that it states no historical reason and uses as few words as possible. Done when the comment answers only "why not otherwise" or "what the types cannot say". (Why: history lives in version control and decision records; a comment that repeats it drifts the moment the history moves on.)
+
+## Shared background
+- Glossary: GLOSSARY.md
+- Issue tracker: GitHub (repository not created yet). Record the repository URL here right after `git init` and the first push. Maintainer communication authority for intake: issue comments and label changes on that repository.
+
+## Agent guide
+- Delivery follows the canonical workflow plan → execute → review → verify; `/oh-my-claudecode:launch` is an optional governed delivery pipeline (opt-in, invoke explicitly)
+- On term conflicts GLOSSARY.md wins; new terms are recorded the moment they settle
+- When a deferred surface first appears (standards, decision records, business knowledge, project skills, the design system), it gets an index section here at the moment it is created — never before
