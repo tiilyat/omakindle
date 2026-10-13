@@ -24,7 +24,13 @@ setup() {
 base="$SHIM_DIR/$name"
 { printf '%q ' "\$@"; echo; } >>"\$base.argv"
 if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then cat >>"\$base.stdin"; fi
+prev=
+for arg in "\$@"; do
+  [ "\$prev" = --upload-file ] && cp "\$arg" "\$base.upload"
+  prev=\$arg
+done
 [ -f "\$base.out" ] && cat "\$base.out"
+[ -f "\$base.err" ] && cat "\$base.err" >&2
 code="\$(cat "\$base.exit" 2>/dev/null)"
 exit "\${code:-0}"
 SHIM

@@ -11,7 +11,161 @@ not_implemented() {
   exit 1
 }
 
-cmd_send() { not_implemented send; }
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omakindle"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omakindle"
+log="$state_dir/last-send.log"
+extensions=" epub pdf doc docx txt rtf htm html png gif jpg jpeg bmp "
+max_bytes=52428800
+
+write_status() {
+  local tmp
+  tmp="$(mktemp "$state_dir/status.XXXXXX")"
+  jq -n --arg state "$1" --arg class "$2" --arg file "$name" --arg message "$3" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    'def nullable: if . == "" then null else . end;
+     {state: $state, error_class: ($class | nullable), file: $file, at: $at, message: ($message | nullable)}' >"$tmp" ||
+    { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$status"
+}
+
+fail() {
+  local class=$1 state=error code message
+  finished=1
+  case $class in
+    not-configured) code=2 state=not-configured message="Kindle is not set up yet" ;;
+    file-rejected) code=3 message="$name: unsupported format or over 50 MB" ;;
+    auth-failed) code=4 message="Mail login failed — check Settings…" ;;
+    network) code=5 message="Could not reach $SMTP_HOST" ;;
+    send-failed) code=6 message="Mail server refused the message — see log" ;;
+  esac
+  write_status "$state" "$class" "$message"
+  echo "$message" >&2
+  notify-send -a omakindle -u critical "$message" "Log: $log" 2>/dev/null || true
+  exit "$code"
+}
+
+file_accepted() {
+  local ext=${name##*.}
+  [[ $name == *.* && $extensions == *" ${ext,,} "* ]] &&
+    [ -f "$file" ] && [ -r "$file" ] &&
+    [ "$(stat -L -c %s "$file")" -le "$max_bytes" ]
+}
+
+read_password() {
+  password="$(secret-tool lookup application omakindle key smtp-password 2>/dev/null || true)"
+  if [ -z "$password" ] && [ -r "$config_dir/secret" ]; then
+    password="$(<"$config_dir/secret")"
+  fi
+  [ -n "$password" ]
+}
+
+build_mime() {
+  local boundary attachment
+  boundary="omakindle-$(uuidgen)"
+  attachment="$(LC_ALL=C; name=${name//[^ -~]/_}; echo "${name//[\"\\]/_}")"
+  {
+    printf '%s\r\n' \
+      "From: $FROM" \
+      "To: $KINDLE_ADDRESS" \
+      "Subject: omakindle" \
+      "Date: $(date -R)" \
+      "Message-ID: <$(uuidgen)@omakindle>" \
+      "MIME-Version: 1.0" \
+      "Content-Type: multipart/mixed; boundary=\"$boundary\"" \
+      "" \
+      "--$boundary" \
+      "Content-Type: text/plain; charset=us-ascii" \
+      "" \
+      "omakindle" \
+      "--$boundary" \
+      "Content-Type: application/octet-stream; name=\"$attachment\"" \
+      "Content-Disposition: attachment; filename=\"$attachment\"" \
+      "Content-Transfer-Encoding: base64" \
+      ""
+    base64 -w 76 "$file" | sed 's/$/\r/'
+    printf '%s\r\n' "--$boundary--"
+  } >"$mime"
+}
+
+redact() {
+  local text=$1 secret
+  for secret in \
+    "$(printf '\0%s\0%s' "$SMTP_LOGIN" "$password" | base64 -w0)" \
+    "$(printf '%s' "$password" | base64 -w0)" \
+    "$password"; do
+    text=${text//"$secret"/[redacted]}
+  done
+  printf '%s\n' "$text"
+}
+
+cmd_send() {
+  file=${1:-}
+  if [ -z "$file" ]; then
+    file="$(zenity --file-selection --title "Send to Kindle")" || exit 0
+  fi
+  name=${file##*/}
+  status="$state_dir/status.json"
+  (umask 077; mkdir -p "$state_dir")
+  chmod 700 "$state_dir"
+
+  exec 9>"$state_dir/send.lock"
+  if ! flock -n 9; then
+    echo "Another send is running" >&2
+    exit 7
+  fi
+
+  file_accepted || fail file-rejected
+  [ -r "$config_dir/config" ] || fail not-configured
+  local line key
+  unset PROVIDER KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case $line in
+      PROVIDER=* | KINDLE_ADDRESS=* | FROM=* | SMTP_HOST=* | SMTP_PORT=* | SMTP_LOGIN=*)
+        printf -v "${line%%=*}" '%s' "${line#*=}" ;;
+    esac
+  done <"$config_dir/config"
+  for key in KINDLE_ADDRESS FROM SMTP_HOST SMTP_PORT SMTP_LOGIN; do
+    [ -n "${!key:-}" ] || fail not-configured
+  done
+  read_password || fail not-configured
+
+  mime="$(mktemp "$state_dir/mime.XXXXXX")"
+  local curl_pid="" interrupted=""
+  trap 'rm -f "$mime" ${transcript:+"$transcript"}; [ -n "${finished:-}" ] || fail send-failed' EXIT
+  trap 'interrupted=1; ${curl_pid:+kill "$curl_pid" 2>/dev/null}; exit 1' INT TERM HUP
+  transcript="$(mktemp "$state_dir/transcript.XXXXXX")"
+  build_mime
+  write_status sending "" ""
+
+  local login=${SMTP_LOGIN//\\/\\\\} quoted=${password//\\/\\\\} code=0
+  login=${login//\"/\\\"}
+  quoted=${quoted//\"/\\\"}
+  printf 'user = "%s:%s"\n' "$login" "$quoted" |
+    curl -sS -v --ssl-reqd --max-time 600 \
+      --url "smtp://$SMTP_HOST:$SMTP_PORT" \
+      --mail-from "$FROM" --mail-rcpt "$KINDLE_ADDRESS" \
+      --upload-file "$mime" -K - 2>"$transcript" >/dev/null &
+  curl_pid=$!
+  trap 'interrupted=1; kill "$curl_pid" 2>/dev/null || true' INT TERM HUP
+  wait "$curl_pid" || code=$?
+  if [ -n "$interrupted" ]; then
+    wait "$curl_pid" || true
+  fi
+  redact "$(<"$transcript")" >"$log"
+
+  [ -z "$interrupted" ] || fail send-failed
+  case $code in
+    0) ;;
+    67) fail auth-failed ;;
+    6 | 7 | 28 | 35) fail network ;;
+    *) fail send-failed ;;
+  esac
+  write_status sent "" "Sent $name to $KINDLE_ADDRESS"
+  finished=1
+  notify-send -a omakindle -u normal "Sent" "$name to $KINDLE_ADDRESS" 2>/dev/null || true
+}
+
 cmd_setup() { not_implemented setup; }
 cmd_install_menu() { not_implemented install-menu; }
 

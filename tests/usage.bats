@@ -29,10 +29,6 @@ assert_not_implemented() {
   assert_usage_exit bogus
 }
 
-@test "send is not implemented yet" {
-  assert_not_implemented send
-}
-
 @test "setup is not implemented yet" {
   assert_not_implemented setup
 }
