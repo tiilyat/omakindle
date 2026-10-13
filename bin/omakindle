@@ -18,7 +18,7 @@ write_status() {
   jq -n --arg state "$1" --arg class "$2" --arg file "$name" --arg message "$3" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     'def nullable: if . == "" then null else . end;
-     {state: $state, error_class: ($class | nullable), file: $file, at: $at, message: ($message | nullable)}' >"$tmp" ||
+     {state: $state, error_class: ($class | nullable), file: ($file | nullable), at: $at, message: ($message | nullable)}' >"$tmp" ||
     { rm -f "$tmp"; return 1; }
   mv "$tmp" "$status"
 }
