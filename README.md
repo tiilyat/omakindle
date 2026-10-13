@@ -1,14 +1,15 @@
 # omakindle
 
-Send a book file to your Kindle from the Omarchy menu or the bar.
+Send a book file to your Kindle from the Omarchy menu.
 
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/tiilyat/omakindle --enable
+curl -fsSL https://raw.githubusercontent.com/tiilyat/omakindle/main/install.sh | sh
 ```
 
-The `Kindle` menu entry appears when the bar widget first loads.
+It installs `~/.local/bin/omakindle` and adds the `Kindle` entry to the Omarchy menu.
+The install line runs [`install.sh`](install.sh) from this repository; read it before you run it.
 
 ## Before the first send
 
@@ -30,22 +31,18 @@ The `Kindle` menu offers:
 - `Send file…` — pick a file and send it.
 - `Settings…` — reopen the setup form; an empty field keeps the stored value.
 
-The bar widget shows `󰂺`, red after a failed send.
-Clicking it opens the widget panel with the last send's state, message, file, time and error class.
-The panel offers `Send file…` (`Set up…` before setup), `Settings…`, and `Log` after a failure.
-
-Each send ends with a notification, unless you cancel the file dialog or another send is already running.
+Each send ends with a notification, unless you cancel the file dialog or another send is already running; a failed send's notification names the log file.
 
 ### From a terminal
 
 ```sh
-~/.config/omarchy/plugins/io.github.tiilyat.omakindle/bin/omakindle send [file]
-~/.config/omarchy/plugins/io.github.tiilyat.omakindle/bin/omakindle setup
-~/.config/omarchy/plugins/io.github.tiilyat.omakindle/bin/omakindle install-menu
+~/.local/bin/omakindle send [file]
+~/.local/bin/omakindle setup
+~/.local/bin/omakindle install-menu
 ```
 
 Without a file, `send` opens a file dialog.
-`install-menu` rewrites the `Kindle` menu entry; the widget runs it for you, so use it only to restore the entry.
+`install-menu` rewrites the `Kindle` menu entry; the install line runs it for you, so use it only to restore the entry.
 
 ## Files
 
@@ -70,9 +67,9 @@ Amazon may still reject the file later; that rejection arrives as an email to th
 
 | What | Path |
 |---|---|
+| Program | `~/.local/bin/omakindle` |
 | Config | `~/.config/omakindle/config` |
 | Password | keyring via `secret-tool`, label "omakindle SMTP password"; if the keyring is unavailable, `~/.config/omakindle/secret` (mode 0600) |
-| Status file | `$XDG_STATE_HOME/omakindle/status.json` |
 | Log of the last send or setup test | `$XDG_STATE_HOME/omakindle/last-send.log` (password redacted) |
 
 `$XDG_STATE_HOME` defaults to `~/.local/state`.
@@ -86,19 +83,19 @@ Amazon may still reject the file later; that rejection arrives as an email to th
 ## Update
 
 ```sh
-omarchy plugin update
+curl -fsSL https://raw.githubusercontent.com/tiilyat/omakindle/main/install.sh | sh
 ```
+
+The install line fetches `main` by default; to install a branch, tag or commit instead, put `OMAKINDLE_REF=<ref>` before `sh`.
 
 ## Remove
 
 ```sh
-omarchy plugin remove io.github.tiilyat.omakindle
+rm ~/.local/bin/omakindle
 ```
 
-Omarchy has no uninstall hook, so the menu entry stays.
-Delete it by hand from `~/.config/omarchy/extensions/omarchy-menu.jsonc`: everything between `// omakindle:begin` and `// omakindle:end`, markers included.
-Config, password and state are not removed either.
-If you reinstall later, also delete `$XDG_STATE_HOME/omakindle/menu-version`, or the menu entry will not come back.
+Then delete everything between `// omakindle:begin` and `// omakindle:end`, markers included, from `~/.config/omarchy/extensions/omarchy-menu.jsonc`, and run `omarchy menu refresh`.
+Config, password and state are kept; see "Where things live".
 
 ## Development
 

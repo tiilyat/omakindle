@@ -1,6 +1,6 @@
 # 0004 — One repository, main is the release channel, CLI stays inside the plugin folder
 
-Status: accepted (2026-10-13). Decided in [omakindle#9](https://github.com/tiilyat/omakindle/issues/9).
+Status: superseded by 0006 (2026-10-14). Decided in [omakindle#9](https://github.com/tiilyat/omakindle/issues/9).
 
 ## Decision
 The plugin is this repository, id `io.github.tiilyat.omakindle`, with `manifest.json` at the root; the only install path is `omarchy plugin add https://github.com/tiilyat/omakindle`. `main` is always releasable: work lands through branches and pull requests, releases are semver tags `vX.Y.Z` and the manifest `version` equals the tag. The sender CLI lives at `bin/omakindle` inside the installed plugin folder and is called by absolute path; nothing is placed on PATH. `omakindle install-menu` records the manifest `version` in the state dir, and the widget re-runs it when that marker is missing or differs from the manifest; the marker never lives in the plugin folder, because a write there makes omarchy-shell reload every plugin widget. Shipyard files (docs, glossary, CLAUDE.md) ship inside the installed folder; loft artifacts stay on `loft/*` branches.

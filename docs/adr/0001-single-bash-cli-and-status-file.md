@@ -1,6 +1,6 @@
 # 0001 — One Bash CLI sends; a status file is the only channel to the widget
 
-Status: accepted (2026-10-13). Decided in [omakindle#5](https://github.com/tiilyat/omakindle/issues/5).
+Status: superseded by 0006 (2026-10-14). Decided in [omakindle#5](https://github.com/tiilyat/omakindle/issues/5).
 
 ## Decision
 The sending logic is a Bash script, `omakindle send [file]`, using `curl` for SMTP. Both launch surfaces (omarchy-menu entry and bar widget) spawn this one CLI. There is no `service`-kind plugin. The CLI writes `$XDG_STATE_HOME/omakindle/status.json`; the QML widget observes it with `FileView`. Sends are serialised with `flock` on `send.lock` in the same directory.

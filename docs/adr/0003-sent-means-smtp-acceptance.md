@@ -1,6 +1,6 @@
 # 0003 — Sent means SMTP acceptance; failures are five classes
 
-Status: accepted (2026-10-13). Decided in [omakindle#7](https://github.com/tiilyat/omakindle/issues/7).
+Status: accepted (2026-10-13); its status-file and widget statements (lines 6, 12, 17) are superseded by 0006 (2026-10-14). Decided in [omakindle#7](https://github.com/tiilyat/omakindle/issues/7).
 
 ## Decision
 A send is successful when the SMTP server accepts the message (`curl` exit 0). Delivery to the Kindle is not tracked. Before any network call the sender CLI rejects files with an unaccepted extension or larger than 50 MB. Failures fall into five classes — `not-configured`, `file-rejected`, `auth-failed`, `network`, `send-failed` — each with one user-facing text, one CLI exit code (2–6; 7 is `already-sending`), and one `error_class` value in the status file. Both outcomes raise a `notify-send` notification; the full curl stderr of the last send lands in `$XDG_STATE_HOME/omakindle/last-send.log`, password redacted. The status file holds only the last send.
