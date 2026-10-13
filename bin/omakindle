@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: omakindle send [file] | setup | install-menu" >&2
+  exit 1
+}
+
+not_implemented() {
+  echo "omakindle: $1: not implemented" >&2
+  exit 1
+}
+
+cmd_send() { not_implemented send; }
+cmd_setup() { not_implemented setup; }
+cmd_install_menu() { not_implemented install-menu; }
+
+case "${1:-}" in
+  send) shift; cmd_send "$@" ;;
+  setup) shift; cmd_setup "$@" ;;
+  install-menu) shift; cmd_install_menu "$@" ;;
+  *) usage ;;
+esac
